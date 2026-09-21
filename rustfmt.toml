@@ -1,0 +1,12 @@
+# 与项目使用的 Rust 版本风格保持一致
+edition = "2024"
+style_edition = "2024"
+
+# 基础排版
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+newline_style = "Unix"
+
+# 较长的函数调用更早换行
+fn_call_width = 40
