@@ -5,9 +5,11 @@ mod uart;
 mod sbi;
 
 core::arch::global_asm!(include_str!("entry.S"));
+unsafe extern "C" {
+    pub fn _secondary_entry(hart_id: usize, opaque: usize) -> !;
+}
 
 use core::panic::PanicInfo;
-use crate::sbi::_secondary_entry;
 
 use core::fmt::Write;
 

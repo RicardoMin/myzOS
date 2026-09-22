@@ -8,10 +8,6 @@ pub struct SbiRet {
 const EID_BASE: usize = 0x10;
 const EID_HSM: usize = 0x48534D;
 
-unsafe extern "C" {
-
-    pub fn _secondary_entry(hart_id: usize, opaque: usize) -> !;
-}
 
 
 fn sbi_call1(eid: usize, fid: usize, arg0: usize) -> SbiRet {
