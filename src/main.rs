@@ -4,6 +4,7 @@
 
 mod uart;
 mod sbi;
+mod spinlock;
 
 
 use core::panic::PanicInfo;
@@ -20,6 +21,24 @@ unsafe extern "C" {
 
 static SECONDARY_READY: AtomicBool = AtomicBool::new(false);
 static  SECONDARY_HART: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+const ITERATIONS: usize = 100_000;
+
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
+static COUNTER_LOCK: spinlock::RawSpinLock =
+    spinlock::RawSpinLock::new();
+
+static START_COUNTING: AtomicBool = AtomicBool::new(false);
+static SECONDARY_DONE: AtomicBool = AtomicBool::new(false);
+
+fn increment_counter() {
+    COUNTER_LOCK.lock();
+
+    let value = COUNTER.load(Ordering::Relaxed);
+    COUNTER.store(value + 1, Ordering::Relaxed);
+
+    COUNTER_LOCK.unlock();
+}
 
 
 #[panic_handler]
@@ -125,6 +144,24 @@ pub extern "C" fn kernel_main(
             _hart_id,
             reported_hart,
         );
+
+        START_COUNTING.store(true, Ordering::Release);
+
+        for _ in 0..ITERATIONS {
+            increment_counter();
+        }
+
+        while !SECONDARY_DONE.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+
+        let actual = COUNTER.load(Ordering::Relaxed);
+        let _ = write!(
+            &mut writer,
+            "counter: expected={} actual={}\r\n",
+            2 * ITERATIONS,
+            actual,
+        );
     }
 
     loop {}
@@ -138,6 +175,16 @@ pub extern "C" fn secondary_main(
 ) -> ! {
     SECONDARY_HART.store(hart_id, Ordering::Relaxed);
     SECONDARY_READY.store(true, Ordering::Release);
+
+    while !START_COUNTING.load(Ordering::Acquire) {
+        core::hint::spin_loop();
+    }
+
+    for _ in 0..ITERATIONS {
+        increment_counter();
+    }
+
+    SECONDARY_DONE.store(true, Ordering::Release);
 
     loop {}
 }
