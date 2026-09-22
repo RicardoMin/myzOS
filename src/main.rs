@@ -1,17 +1,26 @@
 #![no_std]
 #![no_main]
 
+
 mod uart;
 mod sbi;
 
+
+use core::panic::PanicInfo;
+use core::fmt::Write;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+
 core::arch::global_asm!(include_str!("entry.S"));
+
 unsafe extern "C" {
     pub fn _secondary_entry(hart_id: usize, opaque: usize) -> !;
 }
 
-use core::panic::PanicInfo;
 
-use core::fmt::Write;
+static SECONDARY_READY: AtomicBool = AtomicBool::new(false);
+static  SECONDARY_HART: AtomicUsize = AtomicUsize::new(usize::MAX);
+
 
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
@@ -100,7 +109,22 @@ pub extern "C" fn kernel_main(
                 target_hart,
                 result.error,
             );
+
+            loop {}
         }
+
+        while !SECONDARY_READY.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+
+        let reported_hart = SECONDARY_HART.load(Ordering::Relaxed);
+
+        let _ = write!(
+            &mut writer,
+            "boot hart {}: observed secondary {} ready\r\n",
+            _hart_id,
+            reported_hart,
+        );
     }
 
     loop {}
@@ -110,16 +134,10 @@ pub extern "C" fn kernel_main(
 #[unsafe(no_mangle)]
 pub extern "C" fn secondary_main(
     hart_id: usize,
-    opaque: usize,
+    _opaque: usize,
 ) -> ! {
-    let mut writer = uart::Writer::new();
-
-    let _ = write!(
-        &mut writer,
-        "secondary: hart={} opaque={:#x}\r\n",
-        hart_id,
-        opaque,
-    );
+    SECONDARY_HART.store(hart_id, Ordering::Relaxed);
+    SECONDARY_READY.store(true, Ordering::Release);
 
     loop {}
 }
