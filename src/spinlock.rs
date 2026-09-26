@@ -6,6 +6,12 @@ pub struct RawSpinLock {
 }
 
 
+#[must_use = "keep the guard alive while accessing protected data"]
+pub struct RawSpinLockGuard<'a> {
+    lock: &'a RawSpinLock,
+}
+
+
 impl RawSpinLock {
     pub const fn new() -> Self {
         Self {
@@ -13,7 +19,7 @@ impl RawSpinLock {
         }
     }
 
-    pub fn try_lock(&self) -> bool {
+    pub fn try_acquire(&self) -> bool {
         self.locked
             .compare_exchange(
                 false,
@@ -24,13 +30,22 @@ impl RawSpinLock {
             .is_ok()
     }
 
-    pub fn lock(&self) {
-        while !self.try_lock() {
+    pub fn lock(&self) -> RawSpinLockGuard<'_> {
+        while !self.try_acquire() {
             core::hint::spin_loop();
         }
+
+        RawSpinLockGuard { lock: self }
     }
 
-    pub fn unlock(&self) {
+    fn unlock(&self) {
         self.locked.store(false, Ordering::Release);
+    }
+}
+
+
+impl Drop for RawSpinLockGuard<'_> {
+    fn drop(&mut self) {
+        self.lock.unlock();
     }
 }

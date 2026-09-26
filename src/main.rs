@@ -32,12 +32,19 @@ static START_COUNTING: AtomicBool = AtomicBool::new(false);
 static SECONDARY_DONE: AtomicBool = AtomicBool::new(false);
 
 fn increment_counter() {
-    COUNTER_LOCK.lock();
+    let _guard = COUNTER_LOCK.lock();
 
     let value = COUNTER.load(Ordering::Relaxed);
     COUNTER.store(value + 1, Ordering::Relaxed);
+}
 
-    COUNTER_LOCK.unlock();
+
+fn guard_return_probe(leave_early: bool) {
+    let _guard = COUNTER_LOCK.lock();
+
+    if leave_early {
+        return;
+    }
 }
 
 
@@ -115,6 +122,17 @@ pub extern "C" fn kernel_main(
             "boot hart {}: starting hart {}\r\n",
             _hart_id,
             target_hart,
+        );
+
+        guard_return_probe(true);
+
+        {
+            let _guard = COUNTER_LOCK.lock();
+        }
+
+        let _ = write!(
+            &mut writer,
+            "guard: reacquired after return\r\n",
         );
 
         let result = unsafe {
