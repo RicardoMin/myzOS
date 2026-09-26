@@ -19,7 +19,7 @@ impl RawSpinLock {
         }
     }
 
-    pub fn try_acquire(&self) -> bool {
+    fn try_acquire(&self) -> bool {
         self.locked
             .compare_exchange(
                 false,

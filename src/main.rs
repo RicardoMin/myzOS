@@ -5,6 +5,7 @@
 mod uart;
 mod sbi;
 mod spinlock;
+mod irq;
 
 
 use core::panic::PanicInfo;
@@ -134,6 +135,35 @@ pub extern "C" fn kernel_main(
             &mut writer,
             "guard: reacquired after return\r\n",
         );
+
+        let before = irq::enabled();
+
+        let outer = irq::save_and_disable();
+        let inner = irq::save_and_disable();
+        let inside = irq::enabled();
+
+        unsafe {
+            irq::restore(inner);
+        }
+        let after_inner = irq::enabled();
+
+        unsafe {
+            irq::restore(outer);
+        }
+        let after = irq::enabled();
+
+        let _ = write!(
+            &mut writer,
+            "irq: before={} outer={} inner={} inside={} after_inner={} after={}\r\n",
+            before,
+            outer,
+            inner,
+            inside,
+            after_inner,
+            after,
+        );
+
+        // ============================ 启动副 hart ==================================
 
         let result = unsafe {
             sbi::hart_start(target_hart, start_addr, 0x1234)
