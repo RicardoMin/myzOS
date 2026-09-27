@@ -6,6 +6,7 @@ mod uart;
 mod sbi;
 mod spinlock;
 mod irq;
+mod cpu;
 
 
 use core::panic::PanicInfo;
@@ -59,6 +60,8 @@ pub extern "C" fn kernel_main(
     _hart_id: usize,
     _dtb_pa: usize
 ) -> ! {
+    assert_eq!(cpu::hart_id(), _hart_id);
+
     let mut writer = uart::Writer::new();
 
     let _ = write!(
@@ -138,29 +141,35 @@ pub extern "C" fn kernel_main(
 
         let before = irq::enabled();
 
-        let outer = irq::save_and_disable();
-        let inner = irq::save_and_disable();
-        let inside = irq::enabled();
+        let lock_a = spinlock::RawSpinLock::new();
+        let lock_b = spinlock::RawSpinLock::new();
 
-        unsafe {
-            irq::restore(inner);
-        }
-        let after_inner = irq::enabled();
+        let d0 = irq::depth();
 
-        unsafe {
-            irq::restore(outer);
-        }
-        let after = irq::enabled();
+        let guard_a = lock_a.lock();
+        let d1 = irq::depth();
+        assert!(!irq::enabled());
+
+        let guard_b = lock_b.lock();
+        let d2 = irq::depth();
+        assert!(!irq::enabled());
+
+        core::mem::drop(guard_a);
+        let d3 = irq::depth();
+        assert!(!irq::enabled());
+
+        core::mem::drop(guard_b);
+        let d4 = irq::depth();
+
+        let depths = [d0, d1, d2, d3, d4];
+        assert_eq!(depths, [0, 1, 2, 1, 0]);
+        assert_eq!(irq::enabled(), before);
 
         let _ = write!(
             &mut writer,
-            "irq: before={} outer={} inner={} inside={} after_inner={} after={}\r\n",
-            before,
-            outer,
-            inner,
-            inside,
-            after_inner,
-            after,
+            "nested irq: depths={:?} resotred={}\r\n",
+            depths,
+            irq::enabled(),
         );
 
         // ============================ 启动副 hart ==================================
@@ -203,6 +212,9 @@ pub extern "C" fn kernel_main(
             core::hint::spin_loop();
         }
 
+        assert_eq!(irq::depth(), 0);
+        assert!(!irq::enabled());
+
         let actual = COUNTER.load(Ordering::Relaxed);
         let _ = write!(
             &mut writer,
@@ -221,6 +233,8 @@ pub extern "C" fn secondary_main(
     hart_id: usize,
     _opaque: usize,
 ) -> ! {
+    assert_eq!(cpu::hart_id(), hart_id);
+
     SECONDARY_HART.store(hart_id, Ordering::Relaxed);
     SECONDARY_READY.store(true, Ordering::Release);
 
@@ -231,6 +245,9 @@ pub extern "C" fn secondary_main(
     for _ in 0..ITERATIONS {
         increment_counter();
     }
+
+    assert_eq!(irq::depth(), 0);
+    assert!(!irq::enabled());
 
     SECONDARY_DONE.store(true, Ordering::Release);
 

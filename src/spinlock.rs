@@ -1,4 +1,7 @@
 use core::sync::atomic::{AtomicBool, Ordering};
+use core::marker::PhantomData;
+
+use crate::{cpu, irq};
 
 
 pub struct RawSpinLock {
@@ -9,6 +12,8 @@ pub struct RawSpinLock {
 #[must_use = "keep the guard alive while accessing protected data"]
 pub struct RawSpinLockGuard<'a> {
     lock: &'a RawSpinLock,
+    hart_id: usize,
+    _not_send: PhantomData<*mut ()>,
 }
 
 
@@ -31,11 +36,17 @@ impl RawSpinLock {
     }
 
     pub fn lock(&self) -> RawSpinLockGuard<'_> {
+        irq::push_off();
+
         while !self.try_acquire() {
             core::hint::spin_loop();
         }
 
-        RawSpinLockGuard { lock: self }
+        RawSpinLockGuard {
+            lock: self ,
+            hart_id: cpu::hart_id(),
+            _not_send: PhantomData,
+        }
     }
 
     fn unlock(&self) {
@@ -46,6 +57,13 @@ impl RawSpinLock {
 
 impl Drop for RawSpinLockGuard<'_> {
     fn drop(&mut self) {
+        assert_eq!(cpu::hart_id(), self.hart_id);
+        assert!(!irq::enabled());
+
         self.lock.unlock();
+
+        unsafe {
+            irq::pop_off();
+        }
     }
 }

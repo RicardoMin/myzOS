@@ -2,6 +2,7 @@
 .globl _entry
 
 _entry:
+    mv tp, a0
     la sp, boot_stack_top
     call kernel_main
 
@@ -21,6 +22,7 @@ boot_stack_top:
 .globl _secondary_entry
 
 _secondary_entry:
+    mv tp, a0
     la sp, secondary_stack_top
     call secondary_main
 

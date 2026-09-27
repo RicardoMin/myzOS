@@ -1,6 +1,79 @@
 use core::arch::asm;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use crate::cpu;
+
 
 const SSTATUS_SIE: usize = 1 << 1;
+
+struct IrqState {
+    depth: AtomicUsize,
+    was_enabled: AtomicBool,
+}
+
+impl IrqState {
+    const fn new() -> Self {
+        Self {
+            depth: AtomicUsize::new(0),
+            was_enabled: AtomicBool::new(false),
+        }
+    }
+}
+
+static IRQ_STATES: [IrqState; cpu::MAX_HARTS] = [
+    IrqState::new(),
+    IrqState::new(),
+];
+
+fn current_state() -> &'static IrqState {
+    let id = cpu::hart_id();
+
+    assert!(id < cpu::MAX_HARTS);
+
+    &IRQ_STATES[id]
+}
+
+pub(crate) fn depth() -> usize {
+    current_state().depth.load(Ordering::Relaxed)
+}
+
+pub(crate) fn push_off() {
+    let old_enabled = save_and_disable();
+    let state = current_state();
+    let old_depth = state.depth.load(Ordering::Relaxed);
+
+    if old_depth == 0 {
+        state.was_enabled.store(old_enabled, Ordering::Relaxed);
+    } else {
+        assert_eq!(old_enabled, false);
+    }
+
+    let next = old_depth
+        .checked_add(1)
+        .expect("IRQ depth overflow");
+    state.depth.store(next, Ordering::Relaxed);
+}
+
+pub(crate) unsafe fn pop_off() {
+    assert_eq!(enabled(), false);
+    let state = current_state();
+    let old_depth = state.depth.load(Ordering::Relaxed);
+    assert!(old_depth > 0);
+
+    let next = old_depth - 1;
+    state.depth.store(next, Ordering::Relaxed);
+
+    if next == 0 {
+        let was_enabled = state.was_enabled.load(Ordering::Relaxed);
+        state.was_enabled.store(false, Ordering::Relaxed);
+
+        if was_enabled {
+            unsafe {
+                restore(true);
+            }
+        }
+    }
+}
 
 pub fn enabled() -> bool {
     let status: usize;
