@@ -7,10 +7,10 @@ mod sbi;
 mod spinlock;
 mod irq;
 mod cpu;
+mod console;
 
 
 use core::panic::PanicInfo;
-use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 
@@ -49,6 +49,16 @@ fn guard_return_probe(leave_early: bool) {
     }
 }
 
+fn console_probe(hart_id: usize) {
+    for seq in 0..100 {
+        let _ = console::print(format_args!(
+            "[hart={} seq={:03}] ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 abcdefghijklmnopqrstuvwxyz end\r\n",
+            hart_id,
+            seq,
+        ));
+    }
+}
+
 
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
@@ -62,42 +72,36 @@ pub extern "C" fn kernel_main(
 ) -> ! {
     assert_eq!(cpu::hart_id(), _hart_id);
 
-    let mut writer = uart::Writer::new();
-
-    let _ = write!(
-        &mut writer, 
+    let _ = console::print(format_args!(
         "myzOS: hart={} dtb={:#x}\r\n", 
         _hart_id,
          _dtb_pa,
-    );
+    ));
 
     let probe = sbi::probe_hsm();
 
-    let _ = write!(
-        &mut writer,
+    let _ = console::print(format_args!(
         "HSM probe: error={} value={}\r\n",
         probe.error,
         probe.value,
-    );
+    ));
 
     if probe.error == 0 && probe.value != 0 {
         for hart_id in 0..2 {
             let result = sbi::hart_get_status(hart_id);
 
             if result.error == 0 {
-                let _ = write!(
-                    &mut writer,
+                let _ = console::print(format_args!(
                     "hart {}: state={}\r\n",
                     hart_id,
                     result.value,
-                );
+                ));
             } else {
-                let _ = write!(
-                    &mut writer,
+                let _ = console::print(format_args!(
                     "hart {}: query failed, error={}\r\n",
                     hart_id,
                     result.error,
-                );
+                ));
             }
         }
 
@@ -109,24 +113,22 @@ pub extern "C" fn kernel_main(
         let status = sbi::hart_get_status(target_hart);
 
         if status.error != 0 || status.value != 1 {
-            let _ = write!(
-                &mut writer,
+            let _ = console::print(format_args!(
                 "hart {}: query failed or not stopped, error={}, state={}\r\n",
                 target_hart,
                 status.error,
                 status.value,
-            );
+            ));
             
             loop {}
         }
 
         let start_addr = _secondary_entry as *const () as usize;
-        let _ = write!(
-            &mut writer,
+        let _ = console::print(format_args!(
             "boot hart {}: starting hart {}\r\n",
             _hart_id,
             target_hart,
-        );
+        ));
 
         guard_return_probe(true);
 
@@ -134,10 +136,9 @@ pub extern "C" fn kernel_main(
             let _guard = COUNTER_LOCK.lock();
         }
 
-        let _ = write!(
-            &mut writer,
+        let _ = console::print(format_args!(
             "guard: reacquired after return\r\n",
-        );
+        ));
 
         let before = irq::enabled();
 
@@ -165,12 +166,11 @@ pub extern "C" fn kernel_main(
         assert_eq!(depths, [0, 1, 2, 1, 0]);
         assert_eq!(irq::enabled(), before);
 
-        let _ = write!(
-            &mut writer,
-            "nested irq: depths={:?} resotred={}\r\n",
+        let _ = console::print(format_args!(
+            "nested irq: depths={:?} restored={}\r\n",
             depths,
             irq::enabled(),
-        );
+        ));
 
         // ============================ 启动副 hart ==================================
 
@@ -179,12 +179,11 @@ pub extern "C" fn kernel_main(
         };
 
         if result.error != 0 {
-            let _ = write!(
-                &mut writer,
+            let _ = console::print(format_args!(
                 "start hart {} failed, error={}\r\n",
                 target_hart,
                 result.error,
-            );
+            ));
 
             loop {}
         }
@@ -195,14 +194,15 @@ pub extern "C" fn kernel_main(
 
         let reported_hart = SECONDARY_HART.load(Ordering::Relaxed);
 
-        let _ = write!(
-            &mut writer,
+        let _ = console::print(format_args!(
             "boot hart {}: observed secondary {} ready\r\n",
             _hart_id,
             reported_hart,
-        );
+        ));
 
         START_COUNTING.store(true, Ordering::Release);
+
+        console_probe(_hart_id);
 
         for _ in 0..ITERATIONS {
             increment_counter();
@@ -216,12 +216,11 @@ pub extern "C" fn kernel_main(
         assert!(!irq::enabled());
 
         let actual = COUNTER.load(Ordering::Relaxed);
-        let _ = write!(
-            &mut writer,
+        let _ = console::print(format_args!(
             "counter: expected={} actual={}\r\n",
             2 * ITERATIONS,
             actual,
-        );
+        ));
     }
 
     loop {}
@@ -231,9 +230,15 @@ pub extern "C" fn kernel_main(
 #[unsafe(no_mangle)]
 pub extern "C" fn secondary_main(
     hart_id: usize,
-    _opaque: usize,
+    opaque: usize,
 ) -> ! {
     assert_eq!(cpu::hart_id(), hart_id);
+
+    let _ = console::print(format_args!(
+        "secondary: hart={} opaque={:#x}\r\n",
+        hart_id,
+        opaque,
+    ));
 
     SECONDARY_HART.store(hart_id, Ordering::Relaxed);
     SECONDARY_READY.store(true, Ordering::Release);
@@ -241,6 +246,8 @@ pub extern "C" fn secondary_main(
     while !START_COUNTING.load(Ordering::Acquire) {
         core::hint::spin_loop();
     }
+
+    console_probe(hart_id);
 
     for _ in 0..ITERATIONS {
         increment_counter();

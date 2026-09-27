@@ -1,5 +1,7 @@
 use core::fmt;
 
+use crate::cpu;
+
 const UART_BASE: usize = 0x1000_0000;
 
 const THR: usize = 0;
@@ -17,7 +19,11 @@ impl Writer {
         unsafe {
             while (core::ptr::read_volatile((UART_BASE + LSR) as *const u8) & LSR_THRE) == 0 {}
 
+            cpu::io_fence();
+
             core::ptr::write_volatile((UART_BASE + THR) as *mut u8, byte);
+
+            cpu::io_fence();
         }
     }
 }

@@ -15,3 +15,12 @@ pub fn hart_id() -> usize {
 
     id
 }
+
+pub(crate) fn io_fence() {
+    unsafe {
+        asm!(
+            "fence iorw, iorw",
+            options(nostack),
+        );
+    }
+}
