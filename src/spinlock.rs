@@ -43,7 +43,7 @@ impl RawSpinLock {
         }
 
         RawSpinLockGuard {
-            lock: self ,
+            lock: self,
             hart_id: cpu::hart_id(),
             _not_send: PhantomData,
         }

@@ -2,14 +2,15 @@
 #![no_main]
 
 
+#[cfg(feature = "lab1-tests")]
+mod selftest;
 mod uart;
 mod sbi;
 mod spinlock;
 mod irq;
 mod cpu;
 mod console;
-#[cfg(feature = "lab1-tests")]
-mod selftest;
+mod mem;
 
 
 use core::panic::PanicInfo;
@@ -44,6 +45,8 @@ pub extern "C" fn kernel_main(
         _hart_id,
          _dtb_pa,
     ));
+
+    mem::report_layout(_dtb_pa);
 
     let probe = sbi::probe_hsm();
 
