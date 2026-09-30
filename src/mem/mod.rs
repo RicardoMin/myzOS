@@ -1,3 +1,6 @@
+pub mod dtb;
+
+
 pub const PAGE_SIZE: usize = 4096;
 
 pub const RAM_START: usize = 0x8000_0000;
@@ -34,6 +37,28 @@ pub fn kernel_layout() -> KernelLayout {
 pub fn report_layout(dtb_pa: usize) {
     let layout = kernel_layout();
 
+    let _ = crate::console::print(format_args!(
+        concat!(
+            "layout: ram             [{:#x}, {:#x})\r\n",
+            "layout: text            [{:#x}, {:#x})\r\n",
+            "layout: rodata          [{:#x}, {:#x})\r\n",
+            "layout: data+bss+stacks  [{:#x}, {:#x})\r\n",
+            "layout: kernel          [{:#x}, {:#x})\r\n",
+            "layout: dtb_pa={:#x}\r\n",
+        ),
+        RAM_START,
+        RAM_END,
+        layout.start,
+        layout.text_end,
+        layout.text_end,
+        layout.rodata_end,
+        layout.rodata_end,
+        layout.end,
+        layout.start,
+        layout.end,
+        dtb_pa,
+    ));
+
     assert!(PAGE_SIZE != 0, "layout: PAGE_SIZE must not be zero");
 
     assert!(
@@ -58,16 +83,9 @@ pub fn report_layout(dtb_pa: usize) {
     );
 
     assert!(
-        layout.rodata_end <= layout.end,
-        "layout: rodata_end {:#x} exceeds kernel end {:#x}",
+        layout.rodata_end < layout.end,
+        "layout: writable region must be non-empty: [{:#x}, {:#x})",
         layout.rodata_end,
-        layout.end,
-    );
-
-    assert!(
-        layout.start < layout.end,
-        "layout: kernel range must be non-empty: [{:#x}, {:#x})",
-        layout.start,
         layout.end,
     );
 
@@ -99,24 +117,25 @@ pub fn report_layout(dtb_pa: usize) {
 
     let _ = crate::console::print(format_args!(
         concat!(
-            "layout: ram    [{:#x}, {:#x})\r\n",
-            "layout: text   [{:#x}, {:#x})\r\n",
-            "layout: rodata [{:#x}, {:#x})\r\n",
-            "layout: kernel [{:#x}, {:#x})\r\n",
-            "layout: dtb_pa={:#x}\r\n",
             "layout: kernel_bytes={}, kernel_pages={}\r\n",
             "layout: checks passed\r\n",
         ),
-        RAM_START,
-        RAM_END,
-        layout.start,
-        layout.text_end,
-        layout.text_end,
-        layout.rodata_end,
-        layout.start,
-        layout.end,
-        dtb_pa,
         kernel_bytes,
         kernel_pages,
     ));
+}
+
+
+pub fn page_floor(addr: usize) -> usize {
+    addr - addr % PAGE_SIZE
+}
+
+pub fn page_ceil(addr: usize) -> Option<usize> {
+    let remainder = addr % PAGE_SIZE;
+
+    if remainder == 0 {
+        Some(addr)
+    } else {
+        addr.checked_add(PAGE_SIZE - remainder)
+    }
 }

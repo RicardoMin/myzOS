@@ -16,6 +16,9 @@ mod mem;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use crate::mem::PAGE_SIZE;
+use crate::mem::RAM_START;
+use crate::mem::RAM_END;
 
 core::arch::global_asm!(include_str!("entry.S"));
 
@@ -47,6 +50,39 @@ pub extern "C" fn kernel_main(
     ));
 
     mem::report_layout(_dtb_pa);
+
+    // SAFETY: 使用 OpenSBI 传入的启动参数
+    // 当前尚未启用分页，读取期间不会修改设备树
+    let dtb = unsafe {
+        mem::dtb::inspect(_dtb_pa)
+    };
+
+    let reserved_start = mem::page_floor(dtb.start);
+    let reserved_end = mem::page_ceil(dtb.end)
+        .expect("DTB page range overflow");
+
+    assert!(RAM_START <= reserved_start);
+    assert!(reserved_end <= RAM_END);
+
+    let kernel = mem::kernel_layout();
+
+    assert!(
+        reserved_end <= kernel.start
+            || kernel.end <= reserved_start
+    );
+
+    let _ = console::print(format_args!(
+        concat!(
+            "dtb: bytes=[{:#x}, {:#x})\r\n",
+            "dtb: pages=[{:#x}, {:#x})\r\n",
+            "dtb: cover_pages={}\r\n",
+        ),
+        dtb.start,
+        dtb.end,
+        reserved_start,
+        reserved_end,
+        {reserved_end - reserved_start} / PAGE_SIZE,
+    ));
 
     let probe = sbi::probe_hsm();
 
