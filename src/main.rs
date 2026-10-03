@@ -31,6 +31,53 @@ static SECONDARY_READY: AtomicBool = AtomicBool::new(false);
 static  SECONDARY_HART: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 
+/// # Safety
+/// pa 指向当前持有的、可读且已初始化的一整页；
+/// 检查期间没有其他执行者修改该页
+unsafe fn assert_page_filled(pa: usize, expected: u8) {
+    for offset in 0..PAGE_SIZE {
+        let actual = unsafe {
+            (pa as *const u8).add(offset).read()
+        };
+        assert_eq!(actual, expected);
+    }
+}
+
+fn check_page_bool(pool: &mut mem::pmem::PagePool) {
+    let before = pool.free_pages();
+    assert!(before > 1);
+
+    let page_A = pool.alloc();
+    let page_B = pool.alloc();
+    assert!(page_A != page_B && pool.free_pages() == before -2);
+
+    pool.check_free_chain();
+    unsafe {
+        assert_page_filled(page_A, 0);
+        assert_page_filled(page_B, 0);
+
+        core::ptr::write_bytes(page_A as *mut u8, 0xAA, PAGE_SIZE);
+        core::ptr::write_bytes(page_B as *mut u8, 0x55, PAGE_SIZE);
+
+        pool.free(page_A);
+    }
+    assert!(pool.free_pages() == before - 1);
+
+    let page_C = pool.alloc();
+    assert!(page_C == page_A);
+
+    unsafe {
+        assert_page_filled(page_C, 0);
+        assert_page_filled(page_B, 0x55);
+
+        pool.free(page_B);
+        pool.free(page_C);
+    }
+
+    pool.check_initial_chain();
+}
+
+
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
     loop {}
@@ -111,11 +158,11 @@ pub extern "C" fn kernel_main(
     // SAFETY: 当前固定 QEMU/OpenSBI 布局已经核对，
     // 这两个范围排除了内核、固件和 DTB，互不重叠；
     // 此时仅主 hart 初始化，其他执行者不访问这些页面
-    let kernel_pool = unsafe {
+    let mut kernel_pool = unsafe {
         mem::pmem::PagePool::new(pool_begin, split)
     };
 
-    let data_pool = unsafe {
+    let mut data_pool = unsafe {
         mem::pmem::PagePool::new(split, pool_end)
     };
 
@@ -130,6 +177,9 @@ pub extern "C" fn kernel_main(
         data_pool.free_pages(),
         (pool_end - split) / PAGE_SIZE,
     );
+
+    check_page_bool(&mut kernel_pool);
+    check_page_bool(&mut data_pool);
 
     let probe = sbi::probe_hsm();
 

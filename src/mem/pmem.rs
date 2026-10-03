@@ -62,6 +62,42 @@ impl PagePool {
         (self.end - self.begin) / PAGE_SIZE
     }
 
+    pub fn alloc(&mut self) -> usize {
+        assert!(self.head != 0, "pool is dead");
+        assert!(self.free_count > 0);
+
+        let mut pa = self.head;
+        self.assert_page_in_pool(pa);
+
+        let next = unsafe {
+            (pa as *const PageNode).read().next
+        };
+        assert!(next !=0);
+        self.assert_page_in_pool(next);
+
+        self.head = next;
+        self.free_count -= 1;
+
+        unsafe {
+            core::ptr::write_bytes(pa as *mut u8, 0, PAGE_SIZE);
+        }
+        pa
+    }
+
+    pub unsafe fn free(&mut self, pa: usize) {
+        self.assert_page_in_pool(pa);
+        assert!(self.free_count < self.capacity());
+
+        unsafe {
+            (pa as *mut PageNode).write(PageNode {
+                next: self.head
+            });
+        }
+
+        self.head = pa;
+        self.free_count += 1;
+    }
+
     fn assert_page_in_pool(&self, pa: usize) {
         assert!(self.begin <= pa && pa < self.end);
         assert_eq!(pa % PAGE_SIZE, 0);
