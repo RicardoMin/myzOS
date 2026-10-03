@@ -25,6 +25,11 @@ pub unsafe fn inspect(dtb_pa: usize) -> DtbRange {
         .checked_add(PREFIX_SIZE)
         .expect("DTB prefix address overflow");
 
+    assert!(
+        prefix_end <= RAM_END,
+        "DTB prefix exceeds RAM",
+    );
+
     let bytes = unsafe {
         (dtb_pa as *const [u8; PREFIX_SIZE]).read()
     };

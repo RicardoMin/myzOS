@@ -84,6 +84,53 @@ pub extern "C" fn kernel_main(
         {reserved_end - reserved_start} / PAGE_SIZE,
     ));
 
+    // =============== pool 范围 ==============================
+
+    let pool_begin = kernel.end;
+    let pool_end = reserved_start;
+
+    assert!(pool_begin < pool_end);
+
+    let split = pool_begin
+        .checked_add(mem::pmem::KERNEL_PAGES * PAGE_SIZE)
+        .expect("kernel pool boundary overflow");
+
+    assert!(split < pool_end);
+
+    let _ = console::print(format_args!(
+        concat!(
+            "kernel_pool: [{:#x}, {:#x})\r\n",
+            "data_pool: [{:#x}, {:#x})\r\n",
+        ),
+        pool_begin,
+        split,
+        split,
+        pool_end,
+    ));
+
+    // SAFETY: 当前固定 QEMU/OpenSBI 布局已经核对，
+    // 这两个范围排除了内核、固件和 DTB，互不重叠；
+    // 此时仅主 hart 初始化，其他执行者不访问这些页面
+    let kernel_pool = unsafe {
+        mem::pmem::PagePool::new(pool_begin, split)
+    };
+
+    let data_pool = unsafe {
+        mem::pmem::PagePool::new(split, pool_end)
+    };
+
+    kernel_pool.check_initial_chain();
+    data_pool.check_initial_chain();
+
+    assert_eq!(
+        kernel_pool.free_pages(),
+        mem::pmem::KERNEL_PAGES,
+    );
+    assert_eq!(
+        data_pool.free_pages(),
+        (pool_end - split) / PAGE_SIZE,
+    );
+
     let probe = sbi::probe_hsm();
 
     let _ = console::print(format_args!(
