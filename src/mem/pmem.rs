@@ -58,21 +58,35 @@ impl PagePool {
         self.free_count
     }
 
-    pub fn check_initial_chain(&self) {
-        let capacity = (self.end - self.begin) / PAGE_SIZE;
+    pub fn capacity(&self) -> usize {
+        (self.end - self.begin) / PAGE_SIZE
+    }
+
+    fn assert_page_in_pool(&self, pa: usize) {
+        assert!(self.begin <= pa && pa < self.end);
+        assert_eq!(pa % PAGE_SIZE, 0);
+    }
+
+    pub fn check_free_chain(&self) {
+        let capacity = self.capacity();
         let mut cursor = self.head;
         let mut seen = 0;
 
         while cursor != 0 {
-            assert!(self.begin <= cursor);
-            assert!(cursor <= self.end);
-            assert!(cursor % PAGE_SIZE == 0);
+            self.assert_page_in_pool(cursor);
             assert!(seen < capacity);
 
             cursor = unsafe {
-                (cursor as *mut PageNode).read().next
+                (cursor as *const PageNode).read().next
             };
             seen += 1;
         }
+
+        assert_eq!(seen, self.free_count);
+    }
+
+    pub fn check_initial_chain(&self) {
+        self.check_free_chain();
+        assert_eq!(self.free_count, self.capacity());
     }
 }
