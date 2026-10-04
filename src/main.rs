@@ -299,6 +299,9 @@ pub extern "C" fn kernel_main(
         #[cfg(feature = "lab1-tests")]
         selftest::run_primary();
 
+        #[cfg(feature = "lab2-tests")]
+        mem::selftest::run_primary();
+
         let _ = console::print(format_args!(
             "myzOS: boot complete, {} harts online\r\n",
             cpu::MAX_HARTS,
@@ -327,6 +330,9 @@ pub extern "C" fn secondary_main(
 
     #[cfg(feature = "lab1-tests")]
     selftest::run_secondary(hart_id);
+
+    #[cfg(feature = "lab2-tests")]
+    mem::selftest::run_secondary();
 
     loop {}
 }

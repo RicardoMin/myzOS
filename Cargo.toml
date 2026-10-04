@@ -20,3 +20,4 @@ panic = "abort"
 [features]
 default = []
 lab1-tests = []
+lab2-tests = []

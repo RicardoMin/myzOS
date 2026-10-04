@@ -1,5 +1,7 @@
 pub mod dtb;
 pub mod pmem;
+#[cfg(feature = "lab2-tests")]
+pub mod selftest;
 
 
 pub const PAGE_SIZE: usize = 4096;

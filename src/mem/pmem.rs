@@ -10,6 +10,21 @@ static DATA_POOL: SpinLock<Option<PagePool>> =
 
 pub const KERNEL_PAGES: usize = 1024;
 
+#[cfg(feature = "lab2-tests")]
+pub fn check_all_free() {
+    let kernel_slot = KERNEL_POOL.lock();
+    let data_slot = DATA_POOL.lock();
+
+    let kernel_pool = kernel_slot
+        .as_ref()
+        .expect("kernel pool not initialized");
+    let data_pool = data_slot
+        .as_ref()
+        .expect("data pool not initialized");
+
+    kernel_pool.check_initial_chain();
+    data_pool.check_initial_chain();
+}
 
 #[repr(C)]
 struct PageNode {
