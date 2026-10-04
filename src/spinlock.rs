@@ -116,6 +116,8 @@ impl<T> Deref for SpinLockGuard<'_, T> {
 }
 
 impl<T> DerefMut for SpinLockGuard<'_, T> {
+    // SAFETY: 当前守卫持锁；
+    // 返回的可变引用受当前守卫的可变借用约束
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
             &mut *self.lock.value.get()

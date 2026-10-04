@@ -1,5 +1,13 @@
 use super::{PAGE_SIZE, RAM_END, RAM_START};
 
+use crate::spinlock::SpinLock;
+
+
+static KERNEL_POOL: SpinLock<Option<PagePool>> =
+    SpinLock::new(None);
+static DATA_POOL: SpinLock<Option<PagePool>> =
+    SpinLock::new(None);
+
 pub const KERNEL_PAGES: usize = 1024;
 
 
@@ -7,7 +15,6 @@ pub const KERNEL_PAGES: usize = 1024;
 struct PageNode {
     next: usize,
 }
-
 
 pub struct PagePool {
     begin: usize,
@@ -86,7 +93,7 @@ impl PagePool {
     }
 
     /// # Safety
-    /// pa 必须是从本地申请、且尚未归还的一页
+    /// pa 必须是从本池申请、且尚未归还的一页
     /// 归还时，所有使用者都已停止访问该页
     /// 归还后，不得继续通过旧地址或引用读写该页
     pub unsafe fn free(&mut self, pa: usize) {
@@ -130,4 +137,80 @@ impl PagePool {
         self.check_free_chain();
         assert_eq!(self.free_count, self.capacity());
     }
+}
+
+
+pub fn init(kernel: PagePool, data: PagePool) {
+    let mut kernel_guard = KERNEL_POOL.lock();
+    let mut data_guard = DATA_POOL.lock();
+
+    assert!(kernel_guard.is_none());
+    assert!(data_guard.is_none());
+
+    *kernel_guard = Some(kernel);
+    *data_guard = Some(data);
+}
+
+pub fn alloc_kernel() -> usize {
+    let mut slot = KERNEL_POOL.lock();
+
+    let pool = slot
+        .as_mut()
+        .expect("kernel pool not initialized");
+
+    pool.alloc()
+}
+
+pub fn alloc_data() -> usize {
+    let mut slot = DATA_POOL.lock();
+
+    let pool = slot 
+        .as_mut()
+        .expect("data pool not initialized");
+
+    pool.alloc()
+}
+
+/// #SAFETY
+/// 必须归还到原来的池；
+/// 页面尚未归还，所有访问已经停止
+pub unsafe fn free_kernel(pa: usize) {
+    let mut slot = KERNEL_POOL.lock();
+
+    let pool = slot
+        .as_mut()
+        .expect("kernel pool not initialized");
+
+    unsafe {
+        pool.free(pa);
+    }
+}
+
+/// #SAFETY
+/// 必须归还到原来的池
+/// 页面尚未归还，所有访问已经停止
+pub unsafe fn free_data(pa: usize) {
+    let mut slot = DATA_POOL.lock();
+
+    let pool = slot
+        .as_mut()
+        .expect("data pool not initialized");
+
+    unsafe {
+        pool.free(pa);
+    }
+}
+
+pub fn free_counts() -> (usize, usize) {
+    let slot1 = KERNEL_POOL.lock();
+    let slot2 = DATA_POOL.lock();
+
+    let pool1 = slot1
+        .as_ref()
+        .expect("kernel pool not intialized");
+    let pool2 = slot2
+        .as_ref()
+        .expect("data pool not initialized");
+
+    (pool1.free_pages(), pool2.free_pages())
 }

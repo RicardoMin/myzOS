@@ -19,6 +19,13 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use crate::mem::PAGE_SIZE;
 use crate::mem::RAM_START;
 use crate::mem::RAM_END;
+use crate::mem::pmem::{
+    alloc_kernel,
+    free_kernel,
+    alloc_data,
+    free_data,
+    free_counts,
+};
 
 core::arch::global_asm!(include_str!("entry.S"));
 
@@ -159,39 +166,52 @@ pub extern "C" fn kernel_main(
     // SAFETY: 当前固定 QEMU/OpenSBI 布局已经核对，
     // 这两个范围排除了内核、固件和 DTB，互不重叠；
     // 此时仅主 hart 初始化，其他执行者不访问这些页面
-    let kernel_pool = unsafe {
+    let mut kernel_pool = unsafe {
         mem::pmem::PagePool::new(pool_begin, split)
     };
-    let kernel_pool = spinlock::SpinLock::new(kernel_pool);
 
-    let data_pool = unsafe {
+    let mut data_pool = unsafe {
         mem::pmem::PagePool::new(split, pool_end)
     };
-    let data_pool = spinlock::SpinLock::new(data_pool);
 
+    let _ = console::print(format_args!(
+        "kernel_pool begins check\r\n",
+    ));
     {
-        let mut pool = kernel_pool.lock();
-        pool.check_initial_chain();
-        assert_eq!(pool.free_pages(), mem::pmem::KERNEL_PAGES);
-        let _ = console::print(format_args!(
-            "kernel_pool begins check\r\n",
-        ));
-        check_page_pool(&mut *pool);
-        let _ = console::print(format_args!(
-            "kernel pool: alloc/free/zero checks passed\r\n"
-        ));
-
-        let mut pool = data_pool.lock();
-        pool.check_initial_chain();
-        assert_eq!(pool.free_pages(), (pool_end - split) / PAGE_SIZE);
-        let _ = console::print(format_args!(
-            "data_pool begins check\r\n",
-        ));
-        check_page_pool(&mut *pool);
-        let _ = console::print(format_args!(
-            "data pool: alloc/free/zero checks passed\r\n"
-        ));
+        kernel_pool.check_initial_chain();
+        assert_eq!(kernel_pool.free_pages(), mem::pmem::KERNEL_PAGES);
+        check_page_pool(&mut kernel_pool);
     }
+    let _ = console::print(format_args!(
+        "kernel pool: alloc/free/zero checks passed\r\n"
+    ));
+
+    let _ = console::print(format_args!(
+        "data_pool begins check\r\n",
+    ));
+    {
+        data_pool.check_initial_chain();
+        assert_eq!(data_pool.free_pages(), (pool_end - split) / PAGE_SIZE);
+        check_page_pool(&mut data_pool);
+    }
+    let _ = console::print(format_args!(
+        "data pool: alloc/free/zero checks passed\r\n"
+    ));
+
+    mem::pmem::init(kernel_pool, data_pool);
+
+    let before = free_counts();
+    let kernel_pa = alloc_kernel();
+    let data_pa = alloc_data();
+
+    unsafe {
+        free_kernel(kernel_pa);
+        free_data(data_pa);
+    }
+    assert_eq!(free_counts(), before);
+    let _ = console::print(format_args!(
+        "global page pool is ready\r\n",
+    ));
 
     let probe = sbi::probe_hsm();
 

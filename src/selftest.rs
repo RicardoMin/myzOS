@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{console, cpu, irq, spinlock};
 
