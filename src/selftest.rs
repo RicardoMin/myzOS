@@ -5,24 +5,21 @@ use crate::{console, cpu, irq, spinlock};
 
 const ITERATIONS: usize = 100_000;
 
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
-static COUNTER_LOCK: spinlock::RawSpinLock =
-    spinlock::RawSpinLock::new();
+static COUNTER: spinlock::SpinLock<usize> = 
+    spinlock::SpinLock::new(0);
 
 static START_COUNTING: AtomicBool = AtomicBool::new(false);
 static SECONDARY_DONE: AtomicBool = AtomicBool::new(false);
 
 
 fn increment_counter() {
-    let _guard = COUNTER_LOCK.lock();
-
-    let value = COUNTER.load(Ordering::Relaxed);
-    COUNTER.store(value + 1, Ordering::Relaxed);
+    let mut counter = COUNTER.lock();
+    *counter += 1;
 }
 
 
 fn guard_return_probe(leave_early: bool) {
-    let _guard = COUNTER_LOCK.lock();
+    let _guard = COUNTER.lock();
 
     if leave_early {
         return;
@@ -44,7 +41,7 @@ pub fn boot_checks() {
     guard_return_probe(true);
 
     {
-        let _guard = COUNTER_LOCK.lock();
+        let _guard = COUNTER.lock();
     }
 
     let _ = console::print(format_args!(
@@ -101,12 +98,11 @@ pub fn run_primary() {
     assert_eq!(irq::depth(), 0);
     assert!(!irq::enabled());
 
-    let actual = COUNTER.load(Ordering::Relaxed);
-    let _ = console::print(format_args!(
-        "counter: expected={} actual={}\r\n",
-        2 * ITERATIONS,
-        actual,
-    ));
+    let actual = {
+        let counter = COUNTER.lock();
+        *counter
+    };
+    assert_eq!(actual, 2 * ITERATIONS);
 }
 
 

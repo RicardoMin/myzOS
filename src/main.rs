@@ -43,7 +43,7 @@ unsafe fn assert_page_filled(pa: usize, expected: u8) {
     }
 }
 
-fn check_page_bool(pool: &mut mem::pmem::PagePool) {
+fn check_page_pool(pool: &mut mem::pmem::PagePool) {
     let before = pool.free_pages();
     assert!(before > 1);
 
@@ -159,41 +159,39 @@ pub extern "C" fn kernel_main(
     // SAFETY: 当前固定 QEMU/OpenSBI 布局已经核对，
     // 这两个范围排除了内核、固件和 DTB，互不重叠；
     // 此时仅主 hart 初始化，其他执行者不访问这些页面
-    let mut kernel_pool = unsafe {
+    let kernel_pool = unsafe {
         mem::pmem::PagePool::new(pool_begin, split)
     };
+    let kernel_pool = spinlock::SpinLock::new(kernel_pool);
 
-    let mut data_pool = unsafe {
+    let data_pool = unsafe {
         mem::pmem::PagePool::new(split, pool_end)
     };
+    let data_pool = spinlock::SpinLock::new(data_pool);
 
-    kernel_pool.check_initial_chain();
-    data_pool.check_initial_chain();
+    {
+        let mut pool = kernel_pool.lock();
+        pool.check_initial_chain();
+        assert_eq!(pool.free_pages(), mem::pmem::KERNEL_PAGES);
+        let _ = console::print(format_args!(
+            "kernel_pool begins check\r\n",
+        ));
+        check_page_pool(&mut *pool);
+        let _ = console::print(format_args!(
+            "kernel pool: alloc/free/zero checks passed\r\n"
+        ));
 
-    assert_eq!(
-        kernel_pool.free_pages(),
-        mem::pmem::KERNEL_PAGES,
-    );
-    assert_eq!(
-        data_pool.free_pages(),
-        (pool_end - split) / PAGE_SIZE,
-    );
-
-    let _ = console::print(format_args!(
-        "kernel_pool begins check\r\n",
-    ));
-    check_page_bool(&mut kernel_pool);
-    let _ = console::print(format_args!(
-        "kernel pool: alloc/free/zero checks passed\r\n"
-    ));
-
-    let _ = console::print(format_args!(
-        "data_pool begins check\r\n",
-    ));
-    check_page_bool(&mut data_pool);
-    let _ = console::print(format_args!(
-        "data pool: alloc/free/zero checks passed\r\n"
-    ));
+        let mut pool = data_pool.lock();
+        pool.check_initial_chain();
+        assert_eq!(pool.free_pages(), (pool_end - split) / PAGE_SIZE);
+        let _ = console::print(format_args!(
+            "data_pool begins check\r\n",
+        ));
+        check_page_pool(&mut *pool);
+        let _ = console::print(format_args!(
+            "data pool: alloc/free/zero checks passed\r\n"
+        ));
+    }
 
     let probe = sbi::probe_hsm();
 

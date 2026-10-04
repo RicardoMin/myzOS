@@ -1,5 +1,7 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::marker::PhantomData;
+use core::cell::UnsafeCell;
+use core::ops::{Deref, DerefMut};
 
 use crate::{cpu, irq};
 
@@ -7,7 +9,6 @@ use crate::{cpu, irq};
 pub struct RawSpinLock {
     locked: AtomicBool,
 }
-
 
 #[must_use = "keep the guard alive while accessing protected data"]
 pub struct RawSpinLockGuard<'a> {
@@ -64,6 +65,60 @@ impl Drop for RawSpinLockGuard<'_> {
 
         unsafe {
             irq::pop_off();
+        }
+    }
+}
+
+
+pub struct SpinLock<T> {
+    raw: RawSpinLock,
+    value: UnsafeCell<T>,
+}
+
+#[must_use = "keep the guard alive while accessing protected data"]
+pub struct SpinLockGuard<'a, T> {
+    lock: &'a SpinLock<T>,
+    _raw: RawSpinLockGuard<'a>,
+}
+
+impl<T> SpinLock<T> {
+    pub const fn new(value: T) -> Self {
+        Self {
+            raw: RawSpinLock::new(),
+            value: UnsafeCell::new(value),
+        }
+    }
+
+    pub fn lock(&self) -> SpinLockGuard<'_, T> {
+        let raw = self.raw.lock();
+        SpinLockGuard {
+            lock: self,
+            _raw: raw,
+        }
+
+    }
+}
+
+// SAFETY: 内部数据只能通过持锁护卫访问；
+// T: Send 允许数据的独占访问权在不同执行者之间交接
+unsafe impl<T: Send> Sync for SpinLock<T> {}
+
+impl<T> Deref for SpinLockGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: 此守卫持有原始锁；
+        // 返回引用的有效期受当前守卫借用约束
+        unsafe {
+            &*self.lock.value.get()
+        }
+    }
+}
+
+impl<T> DerefMut for SpinLockGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe {
+            &mut *self.lock.value.get()
         }
     }
 }
