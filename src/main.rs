@@ -47,31 +47,32 @@ fn check_page_bool(pool: &mut mem::pmem::PagePool) {
     let before = pool.free_pages();
     assert!(before > 1);
 
-    let page_A = pool.alloc();
-    let page_B = pool.alloc();
-    assert!(page_A != page_B && pool.free_pages() == before -2);
+    let page_a = pool.alloc();
+    let page_b = pool.alloc();
+    assert_ne!(page_a, page_b);
+    assert_eq!(pool.free_pages(), before - 2);
 
     pool.check_free_chain();
     unsafe {
-        assert_page_filled(page_A, 0);
-        assert_page_filled(page_B, 0);
+        assert_page_filled(page_a, 0);
+        assert_page_filled(page_b, 0);
 
-        core::ptr::write_bytes(page_A as *mut u8, 0xAA, PAGE_SIZE);
-        core::ptr::write_bytes(page_B as *mut u8, 0x55, PAGE_SIZE);
+        core::ptr::write_bytes(page_a as *mut u8, 0xAA, PAGE_SIZE);
+        core::ptr::write_bytes(page_b as *mut u8, 0x55, PAGE_SIZE);
 
-        pool.free(page_A);
+        pool.free(page_a);
     }
     assert!(pool.free_pages() == before - 1);
 
-    let page_C = pool.alloc();
-    assert!(page_C == page_A);
+    let page_c = pool.alloc();
+    assert!(page_c == page_a);
 
     unsafe {
-        assert_page_filled(page_C, 0);
-        assert_page_filled(page_B, 0x55);
+        assert_page_filled(page_c, 0);
+        assert_page_filled(page_b, 0x55);
 
-        pool.free(page_B);
-        pool.free(page_C);
+        pool.free(page_b);
+        pool.free(page_c);
     }
 
     pool.check_initial_chain();
@@ -178,8 +179,21 @@ pub extern "C" fn kernel_main(
         (pool_end - split) / PAGE_SIZE,
     );
 
+    let _ = console::print(format_args!(
+        "kernel_pool begins check\r\n",
+    ));
     check_page_bool(&mut kernel_pool);
+    let _ = console::print(format_args!(
+        "kernel pool: alloc/free/zero checks passed\r\n"
+    ));
+
+    let _ = console::print(format_args!(
+        "data_pool begins check\r\n",
+    ));
     check_page_bool(&mut data_pool);
+    let _ = console::print(format_args!(
+        "data pool: alloc/free/zero checks passed\r\n"
+    ));
 
     let probe = sbi::probe_hsm();
 

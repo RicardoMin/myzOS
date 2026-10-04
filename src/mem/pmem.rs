@@ -63,17 +63,18 @@ impl PagePool {
     }
 
     pub fn alloc(&mut self) -> usize {
-        assert!(self.head != 0, "pool is dead");
+        assert!(self.head != 0, "page pool exhausted");
         assert!(self.free_count > 0);
 
-        let mut pa = self.head;
+        let pa = self.head;
         self.assert_page_in_pool(pa);
 
         let next = unsafe {
             (pa as *const PageNode).read().next
         };
-        assert!(next !=0);
-        self.assert_page_in_pool(next);
+        if next != 0 {
+            self.assert_page_in_pool(next);
+        }
 
         self.head = next;
         self.free_count -= 1;
@@ -84,6 +85,10 @@ impl PagePool {
         pa
     }
 
+    /// # Safety
+    /// pa 必须是从本地申请、且尚未归还的一页
+    /// 归还时，所有使用者都已停止访问该页
+    /// 归还后，不得继续通过旧地址或引用读写该页
     pub unsafe fn free(&mut self, pa: usize) {
         self.assert_page_in_pool(pa);
         assert!(self.free_count < self.capacity());
