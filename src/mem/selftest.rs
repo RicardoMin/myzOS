@@ -1,4 +1,4 @@
-use core::{alloc, sync::atomic::{AtomicBool, Ordering}};
+use core::{alloc, sync::atomic::{AtomicUsize, Ordering}};
 
 use crate::{console, cpu, mem::{RAM_START, RAM_END, pmem::free_counts}, spinlock::SpinLock};
 use super::{pmem, PAGE_SIZE};
@@ -6,10 +6,12 @@ use super::{pmem, PAGE_SIZE};
 static HELD: SpinLock<[[usize; 2]; 2]> = 
     SpinLock::new([[0; 2]; 2]);
 
-static START: AtomicBool = AtomicBool::new(false);
-static SECONDARY_HOLDING: AtomicBool = AtomicBool::new(false);
-static RELEASE_PAGES: AtomicBool = AtomicBool::new(false);
-static SECONDARY_DONE: AtomicBool = AtomicBool::new(false);
+const ROUNDS: usize = 128;
+
+static ROUND_START: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_HOLDING: AtomicUsize = AtomicUsize::new(0);
+static RELEASE_ROUND: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_DONE: AtomicUsize = AtomicUsize::new(0);
 
 
 fn allocate_and_record(hart_id: usize) -> [usize; 2] {
@@ -61,81 +63,103 @@ unsafe fn check_and_return(pages: [usize; 2], pattern: u8) {
     }
 }
 
+fn wait_for_round(progress: &AtomicUsize, round: usize) {
+    while progress.load(Ordering::Acquire) < round {
+        core::hint::spin_loop();
+    }
+}
+
 pub fn run_primary() {
     let before = free_counts();
 
-    START.store(true, Ordering::Release);
-
-    let pages = allocate_and_record(cpu::hart_id());
-
-    while !SECONDARY_HOLDING.load(Ordering::Acquire) {
-        core::hint::spin_loop();
-    }
-
-    let held = {
-        let guard = HELD.lock();
-        *guard
-    };
-
-    let addresses = [
-        held[0][0],
-        held[0][1],
-        held[1][0],
-        held[1][1],
-    ];
     let _ = console::print(format_args!(
-        concat!(
-            "hart0: kernel_page:[{}], data_page:[{}]\r\n",
-            "hart1: kernel_page:[{}], data_page:[{}]\r\n"
-        ),
-        addresses[0],
-        addresses[1],
-        addresses[2],
-        addresses[3],
+        "pmem: starting {} two-hart rounds\r\n",
+        ROUNDS,
     ));
-    for i in 0..4 {
-        for j in i+1..4 {
-            assert_ne!(addresses[i], addresses[j]);
+
+    for round in 1..=ROUNDS {
+
+        ROUND_START.store(round, Ordering::Release);
+
+        let pages = allocate_and_record(cpu::hart_id());
+
+        wait_for_round(&SECONDARY_HOLDING, round);
+
+        let held = {
+            let guard = HELD.lock();
+            *guard
+        };
+
+        let addresses = [
+            held[0][0],
+            held[0][1],
+            held[1][0],
+            held[1][1],
+        ];
+        let _ = console::print(format_args!(
+            concat!(
+                "hart0: kernel_page:[{}], data_page:[{}]\r\n",
+                "hart1: kernel_page:[{}], data_page:[{}]\r\n"
+            ),
+            addresses[0],
+            addresses[1],
+            addresses[2],
+            addresses[3],
+        ));
+        for i in 0..4 {
+            for j in i+1..4 {
+                assert_ne!(addresses[i], addresses[j]);
+            }
+            assert_ne!(addresses[i], 0);
+            assert_eq!(addresses[i] % PAGE_SIZE, 0);
         }
+        assert_eq!(free_counts(), (before.0 -2, before.1 - 2));
+
+        RELEASE_ROUND.store(round, Ordering::Release);
+
+        unsafe {
+            check_and_return(pages, round as u8);
+        }
+
+        wait_for_round(&SECONDARY_DONE, round);
+
+        assert_eq!(
+            free_counts(),
+            before,
+            "round {}: free counts did not recover",
+            round,
+        );
     }
-    assert_eq!(free_counts(), (before.0 -2, before.1 - 2));
 
-    RELEASE_PAGES.store(true, Ordering::Release);
-
-    unsafe {
-        check_and_return(pages, 0xAA);
-    }
-
-    while !SECONDARY_DONE.load(Ordering::Acquire) {
-        core::hint::spin_loop();
-    }
-
-    assert_eq!(free_counts(), before);
     pmem::check_all_free();
 
+    assert_eq!(
+        SECONDARY_DONE.load(Ordering::Acquire),
+        ROUNDS,
+    );
+
     let _ = console::print(format_args!(
-        "pmem:: two-hart allocation checks passed\r\n",
+        "pmem: {} two-hart rounds passed\r\n",
+        ROUNDS,
     ));
 }
 
 pub fn run_secondary() {
-    while !START.load(Ordering::Acquire) {
-        core::hint::spin_loop();
+    for round in 1..=ROUNDS {
+        wait_for_round(&ROUND_START, round);
+
+        let pages = allocate_and_record(cpu::hart_id());
+
+        SECONDARY_HOLDING.store(round, Ordering::Release);
+
+        wait_for_round(&RELEASE_ROUND, round);
+
+        unsafe {
+            check_and_return(pages, !(round as u8));
+        }
+
+        SECONDARY_DONE.store(round, Ordering::Release);
     }
-
-    let pages = allocate_and_record(cpu::hart_id());
-
-    SECONDARY_HOLDING.store(true, Ordering::Release);
-
-    while !RELEASE_PAGES.load(Ordering::Acquire) {
-        core::hint::spin_loop();
-    }
-
-    unsafe {
-        check_and_return(pages, 0xBB);
-    }
-
-    SECONDARY_DONE.store(true, Ordering::Release);
 }
 
 pub fn check_exhaustion(pool: &mut pmem::PagePool) {
@@ -197,16 +221,19 @@ pub fn check_exhaustion(pool: &mut pmem::PagePool) {
     assert_eq!(pool.free_pages(), before);
     pool.check_initial_chain();
 
-    let page = pool.try_alloc();
+    let page = pool
+        .try_alloc()
+        .expect("pool did not recover");
     unsafe {
-        assert_page_filled(page.unwrap(), 0);
-        pool.free(page.unwrap());
+        assert_page_filled(page, 0);
+        pool.free(page);
     }
     assert_eq!(pool.free_pages(), before);
     pool.check_initial_chain();
 
     let _ = console::print(format_args!(
-            "pmem: exhausted and resotred 1024 pages\r\n"
-        )
+            "pmem: exhausted and restored {} pages\r\n",
+            before,
+        ),
     );
 }
