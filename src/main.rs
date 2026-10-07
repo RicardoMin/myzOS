@@ -15,6 +15,7 @@ mod mem;
 
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::fmt::Write;
 
 use crate::mem::PAGE_SIZE;
 use crate::mem::RAM_START;
@@ -36,6 +37,8 @@ unsafe extern "C" {
 
 static SECONDARY_READY: AtomicBool = AtomicBool::new(false);
 static  SECONDARY_HART: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+static PANICKING: AtomicBool = AtomicBool::new(false);
 
 
 /// # Safety
@@ -87,8 +90,25 @@ fn check_page_pool(pool: &mut mem::pmem::PagePool) {
 
 
 #[panic_handler]
-fn panic(_info: &PanicInfo<'_>) -> ! {
-    loop {}
+fn panic(info: &PanicInfo<'_>) -> ! {
+    let _ = irq::save_and_disable();
+
+    let first = !PANICKING.swap(true, Ordering::Relaxed);
+
+    if first {
+        let mut writer = uart::Writer::new();
+
+        let _ = write!(
+            &mut writer,
+            "\r\nPANIC hart={}: {}\r\n",
+            cpu::hart_id(),
+            info,
+        );
+    }
+
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -197,6 +217,12 @@ pub extern "C" fn kernel_main(
     let _ = console::print(format_args!(
         "data pool: alloc/free/zero checks passed\r\n"
     ));
+
+    #[cfg(feature = "lab2-tests")]
+    {
+        mem::selftest::check_exhaustion(&mut kernel_pool);
+        mem::selftest::check_exhaustion(&mut data_pool);
+    }
 
     mem::pmem::init(kernel_pool, data_pool);
 

@@ -84,8 +84,11 @@ impl PagePool {
         (self.end - self.begin) / PAGE_SIZE
     }
 
-    pub fn alloc(&mut self) -> usize {
-        assert!(self.head != 0, "page pool exhausted");
+    pub fn try_alloc(&mut self) -> Option<usize> {
+        if self.head == 0 {
+            assert_eq!(self.free_count, 0);
+            return None;
+        }
         assert!(self.free_count > 0);
 
         let pa = self.head;
@@ -104,7 +107,11 @@ impl PagePool {
         unsafe {
             core::ptr::write_bytes(pa as *mut u8, 0, PAGE_SIZE);
         }
-        pa
+        Some(pa)
+    }
+
+    pub fn alloc(&mut self) -> usize {
+        self.try_alloc().expect("page pool exhausted")
     }
 
     /// # Safety
@@ -186,7 +193,7 @@ pub fn alloc_data() -> usize {
     pool.alloc()
 }
 
-/// #SAFETY
+/// # Safety
 /// 必须归还到原来的池；
 /// 页面尚未归还，所有访问已经停止
 pub unsafe fn free_kernel(pa: usize) {
@@ -222,7 +229,7 @@ pub fn free_counts() -> (usize, usize) {
 
     let pool1 = slot1
         .as_ref()
-        .expect("kernel pool not intialized");
+        .expect("kernel pool not initialized");
     let pool2 = slot2
         .as_ref()
         .expect("data pool not initialized");

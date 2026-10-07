@@ -1,25 +1,25 @@
-use core::sync::atomic::{AtomicBool, Ordering::{self, Release}};
+use core::{alloc, sync::atomic::{AtomicBool, Ordering}};
 
-use crate::{cpu, console, mem::pmem::free_counts, spinlock::SpinLock};
+use crate::{console, cpu, mem::{RAM_START, RAM_END, pmem::free_counts}, spinlock::SpinLock};
 use super::{pmem, PAGE_SIZE};
 
 static HELD: SpinLock<[[usize; 2]; 2]> = 
     SpinLock::new([[0; 2]; 2]);
 
 static START: AtomicBool = AtomicBool::new(false);
-static SECONDATY_HOLDING: AtomicBool = AtomicBool::new(false);
+static SECONDARY_HOLDING: AtomicBool = AtomicBool::new(false);
 static RELEASE_PAGES: AtomicBool = AtomicBool::new(false);
 static SECONDARY_DONE: AtomicBool = AtomicBool::new(false);
 
 
-fn allocate_and_record(role: usize) -> [usize; 2] {
+fn allocate_and_record(hart_id: usize) -> [usize; 2] {
     let kernel_pa = pmem::alloc_kernel();
     let data_pa = pmem::alloc_data();
     let pages = [kernel_pa, data_pa];
 
     {
         let mut held = HELD.lock();
-        held[role] = pages;
+        held[hart_id] = pages;
     }
 
     pages
@@ -28,7 +28,7 @@ fn allocate_and_record(role: usize) -> [usize; 2] {
 /// # Safety
 /// page 必须指向一整页有效、可读且已初始化的内存；
 /// 检查期间不能有其他执行者修改该页
-fn assert_page_filled(page: usize, expected: u8) {
+unsafe fn assert_page_filled(page: usize, expected: u8) {
     for offset in 0..PAGE_SIZE {
         let actual = unsafe {
             (page as *const u8).add(offset).read()
@@ -68,7 +68,7 @@ pub fn run_primary() {
 
     let pages = allocate_and_record(cpu::hart_id());
 
-    while !SECONDATY_HOLDING.load(Ordering::Acquire) {
+    while !SECONDARY_HOLDING.load(Ordering::Acquire) {
         core::hint::spin_loop();
     }
 
@@ -125,7 +125,7 @@ pub fn run_secondary() {
 
     let pages = allocate_and_record(cpu::hart_id());
 
-    SECONDATY_HOLDING.store(true, Ordering::Release);
+    SECONDARY_HOLDING.store(true, Ordering::Release);
 
     while !RELEASE_PAGES.load(Ordering::Acquire) {
         core::hint::spin_loop();
@@ -136,4 +136,77 @@ pub fn run_secondary() {
     }
 
     SECONDARY_DONE.store(true, Ordering::Release);
+}
+
+pub fn check_exhaustion(pool: &mut pmem::PagePool) {
+    let before = pool.free_pages();
+    let mut held = 0usize;
+    let mut allocated = 0usize;
+
+    pool.check_initial_chain();
+
+    while let Some(pa) = pool.try_alloc() {
+        assert!(allocated < before);
+
+        unsafe {
+            (pa as *mut usize).write(held);
+        }
+        held = pa;
+        allocated += 1;
+
+        assert_eq!(pool.free_pages(), before - allocated);
+    }
+
+    assert_eq!(allocated, before);
+    assert_eq!(pool.free_pages(), 0);
+    assert_eq!(pool.try_alloc(), None);
+
+    pool.check_free_chain();
+
+    let mut cursor = held;
+    let mut seen = 0;
+
+    while cursor != 0 {
+        assert!(seen < allocated);
+        assert!(RAM_START <= cursor && cursor < RAM_END);
+        assert_eq!(cursor % PAGE_SIZE, 0);
+
+        let next = unsafe {
+            (cursor as *const usize).read()
+        };
+        cursor = next;
+        seen += 1;
+    }
+
+    assert_eq!(seen, allocated);
+
+    cursor = held;
+
+    while cursor != 0 {
+        let next = unsafe {
+            (cursor as *const usize).read()
+        };
+
+        unsafe {
+            pool.free(cursor);
+        }
+
+        cursor = next;
+    }
+
+    assert_eq!(pool.free_pages(), before);
+    pool.check_initial_chain();
+
+    let page = pool.try_alloc();
+    unsafe {
+        assert_page_filled(page.unwrap(), 0);
+        pool.free(page.unwrap());
+    }
+    assert_eq!(pool.free_pages(), before);
+    pool.check_initial_chain();
+
+    let _ = console::print(format_args!(
+            "pmem: exhausted and resotred 1024 pages\r\n"
+        )
+    );
 }
