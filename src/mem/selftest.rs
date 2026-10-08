@@ -287,3 +287,87 @@ pub fn check_sv39_addresses() {
         "sv39: address checks passed\r\n",
     ));
 }
+
+
+pub fn check_ptes() {
+    use super::vm::{Pte, PTE_R, PTE_W, PTE_X, PTE_V, PTE_A};
+
+    assert_eq!(core::mem::size_of::<Pte>(), 8);
+
+    let empty = Pte::empty();
+    assert_eq!(empty.bits(), 0);
+    assert!(!empty.is_valid());
+    assert!(!empty.is_leaf());
+
+    let pa = 0x8020_1000;
+
+    let mut table = Pte::table(pa).expect("table encoding failed");
+    assert_eq!(table.bits(), 0x2008_0401);
+    assert_eq!(table.pa(), pa);
+    assert_eq!(table.flags(), 1);
+    assert!(table.is_valid());
+    assert!(!table.is_leaf());
+
+    for (permissions, expected_bits, expected_flags) in [
+        (PTE_R, 0x2008_0443, 0x43),
+        (PTE_X, 0x2008_0449, 0x49),
+        (PTE_R | PTE_X, 0x2008_044b, 0x4b),
+        (PTE_R | PTE_W, 0x2008_04c7, 0xc7),
+        (PTE_R | PTE_W | PTE_X, 0x2008_04cf, 0xcf),
+    ] {
+        let pte = Pte::leaf(pa, permissions)
+            .expect("leaf encoding failed");
+
+        assert_eq!(pte.bits(), expected_bits);
+        assert_eq!(pte.pa(), pa);
+        assert_eq!(pte.flags(), expected_flags);
+        assert!(pte.is_valid());
+        assert!(pte.is_leaf());
+    }
+
+    for permissions in [
+        0,
+        PTE_W,
+        PTE_W | PTE_X,
+        PTE_R | PTE_V,
+        PTE_R | PTE_A,
+        PTE_R | 1 << 10,
+    ] {
+        assert!(Pte::leaf(pa, permissions).is_none());
+    }
+
+    assert!((pa + 1) % PAGE_SIZE != 0);
+    assert!(Pte::table(1usize << 56).is_none());
+    assert!(Pte::leaf(1usize << 56, PTE_R).is_none());
+
+    for pa in [
+        0usize,
+        0x1000_0000,
+        1usize << 40,
+        0x00ff_ffff_ffff_f000,
+    ] {
+        table = Pte::table(pa)
+            .expect("valid PA rejected by table");
+
+        assert_eq!(
+            table.pa(),
+            pa,
+            "table PA round-trip failed: {:#x}",
+            pa,
+        );
+
+        let leaf = Pte::leaf(pa, PTE_R)
+            .expect("valid PA rejected by leaf");
+
+        assert_eq!(
+            leaf.pa(),
+            pa,
+            "leaf PA round-trip failed: {:#x}",
+            pa,
+        );
+    }
+
+    let _ = console::print(format_args!(
+        "sv39: PTE checks passed\r\n",
+    ));
+}
