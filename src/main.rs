@@ -141,6 +141,9 @@ pub extern "C" fn kernel_main(
 
     let kernel = mem::kernel_layout();
 
+    #[cfg(feature = "lab2-tests")]
+    mem::selftest::check_sv39_addresses();
+
     assert!(
         reserved_end <= kernel.start
             || kernel.end <= reserved_start

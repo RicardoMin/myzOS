@@ -1,5 +1,6 @@
 pub mod dtb;
 pub mod pmem;
+pub mod vm;
 #[cfg(feature = "lab2-tests")]
 pub mod selftest;
 

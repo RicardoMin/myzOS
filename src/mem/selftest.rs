@@ -1,4 +1,4 @@
-use core::{alloc, sync::atomic::{AtomicUsize, Ordering}};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::{console, cpu, mem::{RAM_START, RAM_END, pmem::free_counts}, spinlock::SpinLock};
 use super::{pmem, PAGE_SIZE};
@@ -96,16 +96,18 @@ pub fn run_primary() {
             held[1][0],
             held[1][1],
         ];
-        let _ = console::print(format_args!(
-            concat!(
-                "hart0: kernel_page:[{}], data_page:[{}]\r\n",
-                "hart1: kernel_page:[{}], data_page:[{}]\r\n"
-            ),
-            addresses[0],
-            addresses[1],
-            addresses[2],
-            addresses[3],
-        ));
+        if round == 1 || round == ROUNDS {
+            let _ = console::print(format_args!(
+                concat!(
+                    "hart0: kernel_page:[{}], data_page:[{}]\r\n",
+                    "hart1: kernel_page:[{}], data_page:[{}]\r\n"
+                ),
+                addresses[0],
+                addresses[1],
+                addresses[2],
+                addresses[3],
+            ));
+        }
         for i in 0..4 {
             for j in i+1..4 {
                 assert_ne!(addresses[i], addresses[j]);
@@ -236,4 +238,52 @@ pub fn check_exhaustion(pool: &mut pmem::PagePool) {
             before,
         ),
     );
+}
+
+
+pub fn check_sv39_addresses() {
+    use super::vm;
+
+    assert_eq!(usize::BITS, 64);
+    assert_eq!(PAGE_SIZE, 4096);
+
+    let cases = [
+        (0usize, [0, 0, 0], 0),
+        (0x0000_0000_4040_3abc, [1, 2, 3], 0xabc),
+        (0x0000_0000_8020_1234, [2, 1, 1], 0x234),
+        (0x0000_003f_ffff_ffff, [255, 511, 511], 0xfff),
+        (0xffff_ffc0_0000_0000, [256, 0, 0], 0),
+        (0xffff_ffff_ffff_ffff, [511, 511, 511], 0xfff),
+    ];
+
+    for (va, expected_indices, expected_offset) in cases {
+        assert!(vm::is_canonical(va), "va={:#x}", va);
+
+        assert_eq!(
+            vm::vpn_indices(va),
+            Some(expected_indices),
+            "va={:#x}",
+            va,
+        );
+
+        assert_eq!(
+            vm::page_offset(va),
+            expected_offset,
+            "va={:#x}",
+            va,
+        );
+    }
+
+    for va in [
+        0x0000_0040_0000_0000usize,
+        0xffff_ffbf_ffff_ffff,
+        0x8000_0000_0000_0000,
+    ] {
+        assert!(!vm::is_canonical(va), "va={:#x}", va);
+        assert_eq!(vm::vpn_indices(va), None, "va={:#x}", va);
+    }
+
+    let _ = console::print(format_args!(
+        "sv39: address checks passed\r\n",
+    ));
 }
