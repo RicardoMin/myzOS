@@ -3,6 +3,7 @@ use super::{
     RAM_START,
     RAM_END,
     vm::{self, Pte},
+    pmem,
 };
 
 
@@ -89,6 +90,63 @@ pub unsafe fn translate_4k(
     };
 
     pte.is_leaf().then(|| {
-        pte.pa() + (va & 0xfff)
+        pte.pa() + vm::page_offset(va)
     })
+}
+
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum MapError {
+    InvalidVa,
+    InvalidLeaf,
+    UpperLevelLeaf,
+    SlotOccupied,
+}
+
+pub unsafe fn map_4k(
+    root_pa: usize,
+    va: usize,
+    pa: usize,
+    permissions: usize,
+) -> Result<(), MapError> {
+    let [vpn2, vpn1, vpn0] = 
+        vm::vpn_indices(va).ok_or(MapError::InvalidVa)?;
+
+    if vm::page_offset(va) != 0 {
+        return Err(MapError::InvalidVa);
+    }
+
+    let leaf = 
+        Pte::leaf(pa, permissions).ok_or(MapError::InvalidLeaf)?;
+
+    let mut current = root_pa;
+
+    for index in [vpn2, vpn1] {
+        unsafe {
+            let entry = read_pte(current, index);
+
+            if !entry.is_valid() {
+                let child = pmem::alloc_kernel();
+                let link = Pte::table(child)
+                    .expect("allocated page must be a valid page table address");
+                write_pte(current, index, link);
+                current = child;
+            } else {
+                (!Pte::is_leaf(entry)).ok_or(MapError::UpperLevelLeaf)?;
+                current = entry.pa();
+            }
+        }
+    }
+
+    unsafe {
+        let old = read_pte(current, vpn0);
+
+        if old.is_valid() {
+            return Err(MapError::SlotOccupied);
+        }
+
+        write_pte(current, vpn0, leaf);
+
+        Ok(())
+    }
 }

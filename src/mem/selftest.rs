@@ -1,7 +1,15 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{console, cpu, mem::{RAM_END, RAM_START, pagetable::ENTRIES, pmem::free_counts}, spinlock::SpinLock};
+use crate::{console, cpu, mem::{RAM_END, RAM_START, pagetable::{self, ENTRIES, MapError::{SlotOccupied, UpperLevelLeaf}, translate_4k, write_pte}, pmem::{free_counts, free_data, free_kernel}}, spinlock::SpinLock};
 use super::{pmem, PAGE_SIZE};
+use super::{pagetable::{map_4k, read_pte}};
+use super::vm;
+use super::vm::{
+    Pte,
+    PTE_R,
+    PTE_W,
+};
+
 
 static HELD: SpinLock<[[usize; 2]; 2]> = 
     SpinLock::new([[0; 2]; 2]);
@@ -393,6 +401,14 @@ pub fn check_page_walk() {
     let level0 = pmem::alloc_kernel();
     let data = pmem::alloc_data();
 
+    let pages = [root, level1, level0, data];
+
+    for i in 0..pages.len() {
+        for j in i + 1..pages.len() {
+            assert_ne!(pages[i], pages[j]);
+        }
+    }
+
     assert_eq!(
         pmem::free_counts(),
         (before.0 - 3, before.1 - 1),
@@ -478,6 +494,33 @@ pub fn check_page_walk() {
     }
 
     unsafe {
+        let tmp = read_pte(root, vpn2);
+        let leaf = read_pte(level0, vpn0);
+
+        write_pte(root, vpn2, leaf);
+        assert_eq!(translate_4k(root, base), None);
+        write_pte(root, vpn2, tmp);
+    }
+
+    unsafe {
+        let tmp = read_pte(level1, vpn1);
+        let leaf = read_pte(level0, vpn0);
+
+        write_pte(level1, vpn1, leaf);
+        assert_eq!(translate_4k(level1, base), None);
+        write_pte(level1, vpn1, tmp);
+    }
+
+    unsafe {
+        let tmp = read_pte(level0, vpn0);
+        let not_leaf = read_pte(root, vpn2);
+
+        write_pte(level1, vpn1, not_leaf);
+        assert_eq!(translate_4k(level0, base), None);
+        write_pte(level0, vpn0, tmp);
+    }
+
+    unsafe {
         write_pte(level0, vpn0, Pte::empty());
 
         assert_eq!(translate_4k(root, base), None);
@@ -496,5 +539,96 @@ pub fn check_page_walk() {
 
     let _ = console::print(format_args!(
         "sv39: manual page walk checks passed\r\n",
+    ));
+}
+
+
+pub fn check_auto_map() {
+    let before = free_counts();
+    let root = pmem::alloc_kernel();
+    let data_a = pmem::alloc_data();
+    let data_b = pmem::alloc_data();
+    let data_c = pmem::alloc_data();
+
+    for (va, pa, permissions) in [
+    (0x4040_3000, data_a, PTE_R | PTE_W),
+    (0x4040_4000, data_b, PTE_R),
+    (0x4060_3000, data_c, PTE_R | PTE_W),
+    ] 
+    {
+        assert_eq!(unsafe {map_4k(root, va, pa, permissions)}, Ok(()));
+
+        assert_eq!(unsafe {translate_4k(root, va).unwrap()}, pa);
+        assert_eq!(unsafe {translate_4k(root, va + 0xabc).unwrap()}, pa + 0xabc);
+        assert_eq!(unsafe {translate_4k(root, va + 0xfff).unwrap()}, pa + 0xfff);
+    }
+
+    let level1=  unsafe { pagetable::read_pte(root, 1) }.pa();
+    let level0_ab=  unsafe { pagetable::read_pte(level1, 2) }.pa();
+    let level0_c=  unsafe { pagetable::read_pte(level1, 3) }.pa();
+
+    let pages = [root, level1, level0_ab, level0_c];
+
+    for i in 0..4 {
+        for j in i + 1..4 {
+            assert_ne!(pages[i], pages[j]);
+        }
+    }
+
+    let leaf_a = unsafe { pagetable::read_pte(level0_ab, 3)};
+    let leaf_b = unsafe { pagetable::read_pte(level0_ab, 4)};
+    let leaf_c = unsafe { pagetable::read_pte(level0_c, 3)};
+
+    assert_eq!(leaf_a.bits(), vm::Pte::leaf(data_a, PTE_R | PTE_W).unwrap().bits());
+    assert_eq!(leaf_b.bits(), vm::Pte::leaf(data_b, PTE_R).unwrap().bits());
+    assert_eq!(leaf_c.bits(), vm::Pte::leaf(data_c, PTE_R | PTE_W).unwrap().bits());
+
+    assert_eq!(unsafe { map_4k(root, 0x8000_0001, data_a, PTE_R) }, Err(pagetable::MapError::InvalidVa));
+    assert_eq!(unsafe { map_4k(root, 0x8000_0000, data_a, PTE_W) }, Err(pagetable::MapError::InvalidLeaf));
+
+    assert_eq!(
+        unsafe { map_4k(root, 0x4040_3000, data_b, PTE_R) },
+        Err(SlotOccupied),
+    );
+
+    let upper_leaf = Pte::leaf(0x8000_0000, PTE_R).unwrap();
+
+    unsafe {
+        write_pte(root, 2, upper_leaf);
+    }
+    assert_eq!(
+        unsafe { map_4k(root, 0x8000_0000, data_a, PTE_R) },
+        Err(UpperLevelLeaf),
+    );
+    unsafe {
+        write_pte(root, 2, Pte::empty());
+    }
+
+    unsafe {
+        write_pte(level0_ab, 5, Pte::leaf(0x8000_0000, PTE_R).unwrap());
+        assert_eq!(map_4k(root, 0x4040_5000, data_a, PTE_R), Err(SlotOccupied));
+        write_pte(level0_ab, 5, Pte::empty());
+    }
+
+    unsafe {
+        write_pte(level0_ab, 3, Pte::empty());
+        write_pte(level0_ab, 4, Pte::empty());
+        write_pte(level0_c, 3, Pte::empty());
+        write_pte(level1, 2, Pte::empty());
+        write_pte(level1, 3, Pte::empty());
+        write_pte(root, 1, Pte::empty());
+        free_data(data_a);
+        free_data(data_b);
+        free_data(data_c);
+        free_kernel(level0_ab);
+        free_kernel(level0_c);
+        free_kernel(level1);
+        free_kernel(root);
+
+        assert_eq!(free_counts(), before);
+    }
+
+    let _ = console::print(format_args!(
+        "sv39: automatic mapping checks passed\r\n"
     ));
 }
