@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{console, cpu, mem::{RAM_START, RAM_END, pmem::free_counts}, spinlock::SpinLock};
+use crate::{console, cpu, mem::{RAM_END, RAM_START, pagetable::ENTRIES, pmem::free_counts}, spinlock::SpinLock};
 use super::{pmem, PAGE_SIZE};
 
 static HELD: SpinLock<[[usize; 2]; 2]> = 
@@ -332,11 +332,13 @@ pub fn check_ptes() {
         PTE_R | PTE_V,
         PTE_R | PTE_A,
         PTE_R | 1 << 10,
+        PTE_R | 1 << 4,
     ] {
         assert!(Pte::leaf(pa, permissions).is_none());
     }
 
-    assert!((pa + 1) % PAGE_SIZE != 0);
+    assert!(Pte::table(pa + 1).is_none());
+    assert!(Pte::leaf(pa + 1, PTE_R).is_none());
     assert!(Pte::table(1usize << 56).is_none());
     assert!(Pte::leaf(1usize << 56, PTE_R).is_none());
 
@@ -369,5 +371,130 @@ pub fn check_ptes() {
 
     let _ = console::print(format_args!(
         "sv39: PTE checks passed\r\n",
+    ));
+}
+
+
+pub fn check_page_walk() {
+    use super::{
+        pagetable::{self, read_pte, write_pte, translate_4k},
+        vm::{self, Pte, PTE_R, PTE_W},
+    };
+
+    assert_eq!(
+        core::mem::size_of::<Pte>() * pagetable::ENTRIES,
+        PAGE_SIZE,
+    );
+
+    let before = pmem::free_counts();
+
+    let root = pmem::alloc_kernel();
+    let level1 = pmem::alloc_kernel();
+    let level0 = pmem::alloc_kernel();
+    let data = pmem::alloc_data();
+
+    assert_eq!(
+        pmem::free_counts(),
+        (before.0 - 3, before.1 - 1),
+    );
+
+    let base = 0x4040_3000;
+    let [vpn2, vpn1, vpn0] = 
+        vm::vpn_indices(base).expect("invalid test VA");
+
+    assert_eq!([vpn2, vpn1, vpn0], [1, 2, 3]);
+
+    for pa in [
+        root, level1, level0, data,
+    ] {
+        assert!(pa % PAGE_SIZE == 0);
+        for entry in 0..ENTRIES {
+            unsafe {
+                assert!(read_pte(pa, entry).bits() == 0);
+            }
+        }
+    }
+
+    // SAFETY: 三张表由本函数独占，已清零且仍存活；尚未交给硬件
+    unsafe {
+        assert_eq!(translate_4k(root, base), None);
+    }
+
+    unsafe {
+        write_pte(
+            root,
+            vpn2,
+            Pte::table(level1).expect("level1 address"),
+        );
+
+        write_pte(
+            level1,
+            vpn1,
+            Pte::table(level0).expect("level address"),
+        );
+
+        write_pte(
+            level0,
+            vpn0,
+            Pte::leaf(data, PTE_R | PTE_W).expect("data address"),
+        );
+    }
+
+    unsafe {
+        for offset in [0, 0xabc, PAGE_SIZE - 1] {
+            assert_eq!(
+                translate_4k(root, base + offset),
+                Some(data + offset),
+            );
+        }
+    }
+
+    unsafe {
+        for offset in [
+            base + PAGE_SIZE,
+            base + (1 << 21),
+            base + (1 << 30),
+            0x0000_0040_0000_0000,
+        ] {
+            assert_eq!(
+                translate_4k(root, offset),
+                None,
+            );
+        }
+    }
+
+    unsafe {
+        let translated = translate_4k(root, base + 0xabc)
+            .expect("mapping missing");
+
+        assert_eq!(translated, data + 0xabc);
+
+        (data as *mut u8).add(0xabc).write(0x5a);
+
+        assert_eq!(
+            (translated as *const u8).read(),
+            0x5a,
+        );
+    }
+
+    unsafe {
+        write_pte(level0, vpn0, Pte::empty());
+
+        assert_eq!(translate_4k(root, base), None);
+
+        write_pte(level1, vpn1, Pte::empty());
+        write_pte(root, vpn2, Pte::empty());
+
+        pmem::free_data(data);
+        pmem::free_kernel(level0);
+        pmem::free_kernel(level1);
+        pmem::free_kernel(root);
+    }
+
+    assert_eq!(pmem::free_counts(), before);
+    pmem::check_all_free();
+
+    let _ = console::print(format_args!(
+        "sv39: manual page walk checks passed\r\n",
     ));
 }

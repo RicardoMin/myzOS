@@ -245,6 +245,9 @@ pub extern "C" fn kernel_main(
         "global page pool is ready\r\n",
     ));
 
+    #[cfg(feature = "lab2-tests")]
+    mem::selftest::check_page_walk();
+
     let probe = sbi::probe_hsm();
 
     let _ = console::print(format_args!(

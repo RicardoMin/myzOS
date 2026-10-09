@@ -85,7 +85,7 @@ impl Pte {
     pub fn table(pa: usize) -> Option<Self> {
         let address_bits = encode_pa(pa)?;
 
-        Some(Self(address_bits ^ PTE_V))
+        Some(Self(address_bits | PTE_V))
     }
 
     pub fn leaf(pa: usize, permissions: usize) -> Option<Self> {

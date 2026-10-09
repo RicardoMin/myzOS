@@ -1,6 +1,7 @@
 pub mod dtb;
 pub mod pmem;
 pub mod vm;
+pub mod pagetable;
 #[cfg(feature = "lab2-tests")]
 pub mod selftest;
 
