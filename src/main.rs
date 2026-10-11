@@ -246,8 +246,11 @@ pub extern "C" fn kernel_main(
     ));
 
     #[cfg(feature = "lab2-tests")]
-    mem::selftest::check_page_walk();
-    mem::selftest::check_auto_map();
+    {
+        mem::selftest::check_page_walk();
+        mem::selftest::check_auto_map();
+        mem::selftest::check_unmap();
+    }
 
     let probe = sbi::probe_hsm();
 

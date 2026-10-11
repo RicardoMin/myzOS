@@ -1,8 +1,7 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{console, cpu, mem::{RAM_END, RAM_START, pagetable::{self, ENTRIES, MapError::{SlotOccupied, UpperLevelLeaf}, translate_4k, write_pte}, pmem::{free_counts, free_data, free_kernel}}, spinlock::SpinLock};
+use crate::{console, cpu, mem::{RAM_END, RAM_START, pagetable::{map_4k, self, ENTRIES, MapError::{SlotOccupied, UpperLevelLeaf}, translate_4k, write_pte}, pmem::{free_counts, free_data, free_kernel}}, spinlock::SpinLock};
 use super::{pmem, PAGE_SIZE};
-use super::{pagetable::{map_4k, read_pte}};
 use super::vm;
 use super::vm::{
     Pte,
@@ -507,17 +506,17 @@ pub fn check_page_walk() {
         let leaf = read_pte(level0, vpn0);
 
         write_pte(level1, vpn1, leaf);
-        assert_eq!(translate_4k(level1, base), None);
+        assert_eq!(translate_4k(root, base), None);
         write_pte(level1, vpn1, tmp);
     }
 
     unsafe {
-        let tmp = read_pte(level0, vpn0);
-        let not_leaf = read_pte(root, vpn2);
+        let saved = read_pte(level0, vpn0);
+        let non_leaf = Pte::table(root).unwrap();
 
-        write_pte(level1, vpn1, not_leaf);
-        assert_eq!(translate_4k(level0, base), None);
-        write_pte(level0, vpn0, tmp);
+        write_pte(level0, vpn0, non_leaf);
+        assert_eq!(translate_4k(root, base), None);
+        write_pte(level0, vpn0, saved);
     }
 
     unsafe {
@@ -550,10 +549,10 @@ pub fn check_auto_map() {
     let data_b = pmem::alloc_data();
     let data_c = pmem::alloc_data();
 
-    for (va, pa, permissions) in [
-    (0x4040_3000, data_a, PTE_R | PTE_W),
-    (0x4040_4000, data_b, PTE_R),
-    (0x4060_3000, data_c, PTE_R | PTE_W),
+    for (va, pa, permissions, table_pages) in [
+    (0x4040_3000, data_a, PTE_R | PTE_W, 3),
+    (0x4040_4000, data_b, PTE_R,         3),
+    (0x4060_3000, data_c, PTE_R | PTE_W, 4),
     ] 
     {
         assert_eq!(unsafe {map_4k(root, va, pa, permissions)}, Ok(()));
@@ -561,6 +560,7 @@ pub fn check_auto_map() {
         assert_eq!(unsafe {translate_4k(root, va).unwrap()}, pa);
         assert_eq!(unsafe {translate_4k(root, va + 0xabc).unwrap()}, pa + 0xabc);
         assert_eq!(unsafe {translate_4k(root, va + 0xfff).unwrap()}, pa + 0xfff);
+        assert_eq!(free_counts(), (before.0 - table_pages, before.1 - 3))
     }
 
     let level1=  unsafe { pagetable::read_pte(root, 1) }.pa();
@@ -591,6 +591,7 @@ pub fn check_auto_map() {
         Err(SlotOccupied),
     );
 
+    // 错误路径
     let upper_leaf = Pte::leaf(0x8000_0000, PTE_R).unwrap();
 
     unsafe {
@@ -605,7 +606,7 @@ pub fn check_auto_map() {
     }
 
     unsafe {
-        write_pte(level0_ab, 5, Pte::leaf(0x8000_0000, PTE_R).unwrap());
+        write_pte(level0_ab, 5, Pte::table(0x8000_0000).unwrap());
         assert_eq!(map_4k(root, 0x4040_5000, data_a, PTE_R), Err(SlotOccupied));
         write_pte(level0_ab, 5, Pte::empty());
     }
@@ -626,9 +627,270 @@ pub fn check_auto_map() {
         free_kernel(root);
 
         assert_eq!(free_counts(), before);
+        pmem::check_all_free();
     }
 
     let _ = console::print(format_args!(
         "sv39: automatic mapping checks passed\r\n"
+    ));
+}
+
+
+pub fn check_unmap() {
+    use super::{
+        pagetable::{
+            ENTRIES,
+            UnmapError,
+            map_4k,
+            read_pte,
+            translate_4k,
+            unmap_4k,
+            write_pte,
+        },
+        pmem,
+        vm::{Pte, PTE_R, PTE_W},
+    };
+
+    let before = pmem::free_counts();
+    let root = pmem::alloc_kernel();
+
+    let data = [
+        pmem::alloc_data(),
+        pmem::alloc_data(),
+        pmem::alloc_data(),
+    ];
+
+    let vas = [
+        0x4040_3000,
+        0x4040_4000,
+        0x4060_3000,
+    ];
+
+    let permissions = [
+        PTE_R | PTE_W,
+        PTE_R,
+        PTE_R | PTE_W,
+    ];
+
+    for i in 0..3 {
+        unsafe {
+            (data[i] as *mut u8)
+                .add(0xabc)
+                .write(0x51 + i as u8);
+        }
+
+        assert_eq!(
+            unsafe {
+                map_4k(root, vas[i], data[i], permissions[i])
+            },
+            Ok(()),
+        );
+    }
+
+    let held = pmem::free_counts();
+
+    assert_eq!(
+        held,
+        (before.0 - 4, before.1 - 3),
+    );
+
+    for (va, expected) in [
+        (0x4040_3001, UnmapError::InvalidVa),
+        (0x0000_0040_0000_0000, UnmapError::InvalidVa),
+        (0x8000_0000, UnmapError::NotMapped),
+        (0x4080_3000, UnmapError::NotMapped),
+        (0x4040_5000, UnmapError::NotMapped),
+    ] {
+        assert_eq!(
+            unsafe { unmap_4k(root, va) }.err(),
+            Some(expected),
+        );
+
+        assert_eq!(pmem::free_counts(), held);
+
+        for i in 0..3 {
+            assert_eq!(
+                unsafe { translate_4k(root, vas[i]) },
+                Some(data[i]),
+            );
+        }
+    }
+
+    let level1 = unsafe { read_pte(root, 1) }.pa();
+    let level0_ab = unsafe { read_pte(level1, 2) }.pa();
+
+    let dummy = pmem::alloc_kernel();
+    let with_dummy = pmem::free_counts();
+
+    assert_eq!(
+        with_dummy,
+        (held.0 - 1, held.1),
+    );
+
+    for (table, index, va, entry, expected) in [
+        (
+            root,
+            2,
+            0x8000_0000,
+            Pte::leaf(0x8000_0000, PTE_R).unwrap(),
+            UnmapError::UpperLevelLeaf,
+        ),
+        (
+            level1,
+            4,
+            0x4080_0000,
+            Pte::leaf(0x8000_0000, PTE_R).unwrap(),
+            UnmapError::UpperLevelLeaf,
+        ),
+        (
+            level0_ab,
+            5,
+            0x4040_5000,
+            Pte::table(dummy).unwrap(),
+            UnmapError::NotLeaf,
+        ),
+    ] {
+        unsafe {
+            assert_eq!(read_pte(table, index).bits(), 0);
+            write_pte(table, index, entry);
+        }
+
+        assert_eq!(
+            unsafe { unmap_4k(root, va) }.err(),
+            Some(expected),
+        );
+
+        assert_eq!(
+            unsafe { read_pte(table, index) }.bits(),
+            entry.bits(),
+        );
+
+        assert_eq!(pmem::free_counts(), with_dummy);
+
+        unsafe {
+            write_pte(table, index, Pte::empty());
+        }
+    }
+
+    unsafe {
+        pmem::free_kernel(dummy);
+    }
+
+    assert_eq!(pmem::free_counts(), held);
+
+    let remaining_tables = [4, 3, 1];
+
+    for i in 0..3 {
+        let old = unsafe {
+            unmap_4k(root, vas[i])
+        }
+        .expect("mapping should exist");
+
+        assert_eq!(
+            old.bits(),
+            Pte::leaf(data[i], permissions[i]).unwrap().bits(),
+        );
+
+        assert_eq!(
+            pmem::free_counts(),
+            (before.0 - remaining_tables[i], before.1 - 3),
+        );
+
+        for j in 0..=i {
+            assert_eq!(
+                unsafe { translate_4k(root, vas[j]) },
+                None,
+            );
+        }
+
+        for j in i + 1..3 {
+            assert_eq!(
+                unsafe { translate_4k(root, vas[j]) },
+                Some(data[j]),
+            );
+        }
+
+        for j in 0..3 {
+            assert_eq!(
+                unsafe {
+                    (data[j] as *const u8).add(0xabc).read()
+                },
+                0x51 + j as u8,
+            );
+        }
+
+        let counts = pmem::free_counts();
+
+        assert_eq!(
+            unsafe { unmap_4k(root, vas[0]) }.err(),
+            Some(UnmapError::NotMapped),
+        );
+
+        assert_eq!(pmem::free_counts(), counts);
+    }
+
+    for index in 0..ENTRIES {
+        assert!(!unsafe { read_pte(root, index) }.is_valid());
+    }
+
+    assert_eq!(
+        unsafe {
+            map_4k(root, vas[0], data[0], permissions[0])
+        },
+        Ok(()),
+    );
+
+    assert_eq!(
+        pmem::free_counts(),
+        (before.0 - 3, before.1 - 3),
+    );
+
+    assert_eq!(
+        unsafe { translate_4k(root, vas[0] + 0xabc) },
+        Some(data[0] + 0xabc),
+    );
+
+    assert_eq!(
+        unsafe { (data[0] as *const u8).add(0xabc).read() },
+        0x51,
+    );
+
+    let old = unsafe {
+        unmap_4k(root, vas[0])
+    }
+    .expect("rebuilt mapping should exist");
+
+    assert_eq!(
+        old.bits(),
+        Pte::leaf(data[0], permissions[0]).unwrap().bits(),
+    );
+
+    assert_eq!(
+        unsafe { translate_4k(root, vas[0]) },
+        None,
+    );
+
+    assert_eq!(
+        pmem::free_counts(),
+        (before.0 - 1, before.1 - 3),
+    );
+
+    for index in 0..ENTRIES {
+        assert!(!unsafe { read_pte(root, index) }.is_valid());
+    }
+
+    unsafe {
+        for pa in data {
+            pmem::free_data(pa);
+        }
+
+        pmem::free_kernel(root);
+    }
+
+    assert_eq!(pmem::free_counts(), before);
+    pmem::check_all_free();
+
+    let _ = crate::console::print(format_args!(
+        "sv39: unmap and table reclamation checks passed\r\n",
     ));
 }

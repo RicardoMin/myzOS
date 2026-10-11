@@ -103,6 +103,11 @@ pub enum MapError {
     SlotOccupied,
 }
 
+
+/// # Safety
+/// 页表存活、初始化、独占、可直接访问；
+/// 无并发修改或回收，硬件尚未使用；
+/// 物理页分配器已经初始化
 pub unsafe fn map_4k(
     root_pa: usize,
     va: usize,
@@ -149,4 +154,84 @@ pub unsafe fn map_4k(
 
         Ok(())
     }
+}
+
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum UnmapError {
+    InvalidVa,
+    NotMapped,
+    UpperLevelLeaf,
+    NotLeaf,
+}
+
+
+/// # Safety
+/// table_pa 指向存活、已初始化且可直接读取的页表；
+/// 扫描期间没有并发修改、回收或冲突引用
+unsafe fn table_is_empty(table_pa: usize) -> bool {
+    for index in 0..ENTRIES {
+        let entry = unsafe { read_pte(table_pa, index) };
+
+        if entry.is_valid() {
+            return false;
+        }
+    }
+
+    true
+}
+
+
+pub unsafe fn unmap_4k(
+    root_pa: usize,
+    va: usize,
+) -> Result<Pte, UnmapError> {
+    let indices = 
+        vm::vpn_indices(va).ok_or(UnmapError::InvalidVa)?;
+
+    if vm::page_offset(va) != 0 {
+        return Err(UnmapError::InvalidVa);
+    }
+
+    let mut tables = [root_pa, 0, 0];
+
+    for depth in 0..2 {
+        let entry = unsafe { read_pte(tables[depth], indices[depth]) };
+
+        if !entry.is_valid() {
+            return Err(UnmapError::NotMapped);
+        }
+
+        if entry.is_leaf() {
+            return Err(UnmapError::UpperLevelLeaf);
+        }
+
+        tables[depth + 1] = entry.pa();
+    }
+
+    let old = unsafe { read_pte(tables[2], indices[2])};
+
+    if !old.is_valid() {
+        return Err(UnmapError::NotMapped);
+    }
+
+    if !old.is_leaf() {
+        return Err(UnmapError::NotLeaf);
+    }
+
+    unsafe {
+        write_pte(tables[2], indices[2], Pte::empty());
+
+        if table_is_empty(tables[2]) {
+            write_pte(tables[1], indices[1], Pte::empty());
+            pmem::free_kernel(tables[2]);
+
+            if table_is_empty(tables[1]) {
+                write_pte(tables[0], indices[0], Pte::empty());
+                pmem::free_kernel(tables[1]);
+            }
+        }
+    }
+
+    return Ok(old);
 }
