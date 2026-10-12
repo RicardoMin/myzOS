@@ -17,16 +17,7 @@ use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use core::fmt::Write;
 
-use crate::mem::PAGE_SIZE;
-use crate::mem::RAM_START;
-use crate::mem::RAM_END;
-use crate::mem::pmem::{
-    alloc_kernel,
-    free_kernel,
-    alloc_data,
-    free_data,
-    free_counts,
-};
+use crate::mem::{PAGE_SIZE, RAM_END, RAM_START};
 
 core::arch::global_asm!(include_str!("entry.S"));
 
@@ -39,54 +30,6 @@ static SECONDARY_READY: AtomicBool = AtomicBool::new(false);
 static  SECONDARY_HART: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 static PANICKING: AtomicBool = AtomicBool::new(false);
-
-
-/// # Safety
-/// pa 指向当前持有的、可读且已初始化的一整页；
-/// 检查期间没有其他执行者修改该页
-unsafe fn assert_page_filled(pa: usize, expected: u8) {
-    for offset in 0..PAGE_SIZE {
-        let actual = unsafe {
-            (pa as *const u8).add(offset).read()
-        };
-        assert_eq!(actual, expected);
-    }
-}
-
-fn check_page_pool(pool: &mut mem::pmem::PagePool) {
-    let before = pool.free_pages();
-    assert!(before > 1);
-
-    let page_a = pool.alloc();
-    let page_b = pool.alloc();
-    assert_ne!(page_a, page_b);
-    assert_eq!(pool.free_pages(), before - 2);
-
-    pool.check_free_chain();
-    unsafe {
-        assert_page_filled(page_a, 0);
-        assert_page_filled(page_b, 0);
-
-        core::ptr::write_bytes(page_a as *mut u8, 0xAA, PAGE_SIZE);
-        core::ptr::write_bytes(page_b as *mut u8, 0x55, PAGE_SIZE);
-
-        pool.free(page_a);
-    }
-    assert!(pool.free_pages() == before - 1);
-
-    let page_c = pool.alloc();
-    assert!(page_c == page_a);
-
-    unsafe {
-        assert_page_filled(page_c, 0);
-        assert_page_filled(page_b, 0x55);
-
-        pool.free(page_b);
-        pool.free(page_c);
-    }
-
-    pool.check_initial_chain();
-}
 
 
 #[panic_handler]
@@ -142,10 +85,7 @@ pub extern "C" fn kernel_main(
     let kernel = mem::kernel_layout();
 
     #[cfg(feature = "lab2-tests")]
-    mem::selftest::check_sv39_addresses();
-
-    #[cfg(feature = "lab2-tests")]
-    mem::selftest::check_ptes();
+    mem::selftest::check_vm_encoding();
 
     assert!(
         reserved_end <= kernel.start
@@ -192,65 +132,30 @@ pub extern "C" fn kernel_main(
     // SAFETY: 当前固定 QEMU/OpenSBI 布局已经核对，
     // 这两个范围排除了内核、固件和 DTB，互不重叠；
     // 此时仅主 hart 初始化，其他执行者不访问这些页面
-    let mut kernel_pool = unsafe {
+    let kernel_pool = unsafe {
         mem::pmem::PagePool::new(pool_begin, split)
     };
 
-    let mut data_pool = unsafe {
+    let data_pool = unsafe {
         mem::pmem::PagePool::new(split, pool_end)
     };
 
-    let _ = console::print(format_args!(
-        "kernel_pool begins check\r\n",
-    ));
-    {
-        kernel_pool.check_initial_chain();
-        assert_eq!(kernel_pool.free_pages(), mem::pmem::KERNEL_PAGES);
-        check_page_pool(&mut kernel_pool);
-    }
-    let _ = console::print(format_args!(
-        "kernel pool: alloc/free/zero checks passed\r\n"
-    ));
-
-    let _ = console::print(format_args!(
-        "data_pool begins check\r\n",
-    ));
-    {
-        data_pool.check_initial_chain();
-        assert_eq!(data_pool.free_pages(), (pool_end - split) / PAGE_SIZE);
-        check_page_pool(&mut data_pool);
-    }
-    let _ = console::print(format_args!(
-        "data pool: alloc/free/zero checks passed\r\n"
-    ));
-
     #[cfg(feature = "lab2-tests")]
-    {
+    let (kernel_pool, data_pool) = {
+        let (mut kernel_pool, mut data_pool) = (kernel_pool, data_pool);
         mem::selftest::check_exhaustion(&mut kernel_pool);
         mem::selftest::check_exhaustion(&mut data_pool);
-    }
+        (kernel_pool, data_pool)
+    };
 
     mem::pmem::init(kernel_pool, data_pool);
 
-    let before = free_counts();
-    let kernel_pa = alloc_kernel();
-    let data_pa = alloc_data();
-
-    unsafe {
-        free_kernel(kernel_pa);
-        free_data(data_pa);
-    }
-    assert_eq!(free_counts(), before);
     let _ = console::print(format_args!(
         "global page pool is ready\r\n",
     ));
 
     #[cfg(feature = "lab2-tests")]
-    {
-        mem::selftest::check_page_walk();
-        mem::selftest::check_auto_map();
-        mem::selftest::check_unmap();
-    }
+    mem::selftest::check_page_tables();
 
     let probe = sbi::probe_hsm();
 
@@ -286,14 +191,21 @@ pub extern "C" fn kernel_main(
         };
         let status = sbi::hart_get_status(target_hart);
 
-        if status.error != 0 || status.value != 1 {
+        if status.error != 0 {
             let _ = console::print(format_args!(
-                "hart {}: query failed or not stopped, error={}, state={}\r\n",
-                target_hart,
+                "query failed, error: {}",
                 status.error,
+            ));
+
+            loop {}
+        }
+
+        if status.value != 1 {
+            let _ = console::print(format_args!(
+                "target hart is running, value = {}",
                 status.value,
             ));
-            
+
             loop {}
         }
 

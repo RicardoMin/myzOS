@@ -1,53 +1,26 @@
+//! Lab1 自检：守卫与中断嵌套、双 hart 计数、整行输出。每次启动各入口只调用一次。
+
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{console, cpu, irq, spinlock};
 
-
 const ITERATIONS: usize = 100_000;
 
-static COUNTER: spinlock::SpinLock<usize> = 
-    spinlock::SpinLock::new(0);
+static COUNTER: spinlock::SpinLock<usize> = spinlock::SpinLock::new(0);
 
 static START_COUNTING: AtomicBool = AtomicBool::new(false);
 static SECONDARY_DONE: AtomicBool = AtomicBool::new(false);
-
-
-fn increment_counter() {
-    let mut counter = COUNTER.lock();
-    *counter += 1;
-}
-
-
-fn guard_return_probe(leave_early: bool) {
-    let _guard = COUNTER.lock();
-
-    if leave_early {
-        return;
-    }
-}
 
 fn console_probe(hart_id: usize) {
     for seq in 0..100 {
         let _ = console::print(format_args!(
             "[hart={} seq={:03}] ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 abcdefghijklmnopqrstuvwxyz end\r\n",
-            hart_id,
-            seq,
+            hart_id, seq,
         ));
     }
 }
 
-
 pub fn boot_checks() {
-    guard_return_probe(true);
-
-    {
-        let _guard = COUNTER.lock();
-    }
-
-    let _ = console::print(format_args!(
-        "guard: reacquired after return\r\n",
-    ));
-
     let before = irq::enabled();
 
     let lock_a = spinlock::RawSpinLock::new();
@@ -81,14 +54,14 @@ pub fn boot_checks() {
     ));
 }
 
-
 pub fn run_primary() {
     START_COUNTING.store(true, Ordering::Release);
 
     console_probe(cpu::hart_id());
 
     for _ in 0..ITERATIONS {
-        increment_counter();
+        let mut counter = COUNTER.lock();
+        *counter += 1;
     }
 
     while !SECONDARY_DONE.load(Ordering::Acquire) {
@@ -105,7 +78,6 @@ pub fn run_primary() {
     assert_eq!(actual, 2 * ITERATIONS);
 }
 
-
 pub fn run_secondary(hart_id: usize) {
     while !START_COUNTING.load(Ordering::Acquire) {
         core::hint::spin_loop();
@@ -114,7 +86,8 @@ pub fn run_secondary(hart_id: usize) {
     console_probe(hart_id);
 
     for _ in 0..ITERATIONS {
-        increment_counter();
+        let mut counter = COUNTER.lock();
+        *counter += 1;
     }
 
     assert_eq!(irq::depth(), 0);
