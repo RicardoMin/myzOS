@@ -64,6 +64,7 @@ impl Drop for RawSpinLockGuard<'_> {
         self.lock.unlock();
 
         unsafe {
+            // SAFETY: 当前 hart 的守卫已释放锁，恰好配对此次持锁前的 push_off
             irq::pop_off();
         }
     }

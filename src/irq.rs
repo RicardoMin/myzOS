@@ -54,6 +54,9 @@ pub(crate) fn push_off() {
     state.depth.store(next, Ordering::Relaxed);
 }
 
+/// # Safety
+/// 必须在同一 hart 上，与此前尚未配对的 push_off 对应；
+/// 调用时仍处于关中断状态
 pub(crate) unsafe fn pop_off() {
     assert_eq!(enabled(), false);
     let state = current_state();
@@ -106,6 +109,9 @@ pub fn save_and_disable() -> bool {
 }
 
 
+/// # Safety
+/// 恢复状态必须属于当前 hart 的对应保存操作；
+/// 不能绕过仍然有效的临界区提前开启中断，开启前必须具备处理中断的条件
 pub unsafe fn restore(was_enabled: bool) {
     if was_enabled {
         unsafe {

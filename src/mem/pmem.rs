@@ -208,7 +208,7 @@ pub unsafe fn free_kernel(pa: usize) {
     }
 }
 
-/// #SAFETY
+/// # Safety
 /// 必须归还到原来的池
 /// 页面尚未归还，所有访问已经停止
 pub unsafe fn free_data(pa: usize) {

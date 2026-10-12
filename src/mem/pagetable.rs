@@ -182,6 +182,14 @@ unsafe fn table_is_empty(table_pa: usize) -> bool {
 }
 
 
+/// 删除一个 4 KiB 映射，回收沿途空子表，保留根表和数据页
+/// 返回旧 PTE：返回值不代表调用者获得了数据页所有权
+///
+/// # Safety
+/// 根表及子表存活、已初始化、可直接访问，且未被硬件使用；
+/// 整棵表由调用者独占，无并发访问或冲突引用；
+/// 可回收子表来自内核页池，无共享、环或其他需要保留的用途；
+/// 成功后，已回收的子表的旧地址不得继续访问
 pub unsafe fn unmap_4k(
     root_pa: usize,
     va: usize,
@@ -233,5 +241,5 @@ pub unsafe fn unmap_4k(
         }
     }
 
-    return Ok(old);
+    Ok(old)
 }

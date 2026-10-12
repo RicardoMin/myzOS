@@ -193,7 +193,7 @@ pub extern "C" fn kernel_main(
 
         if status.error != 0 {
             let _ = console::print(format_args!(
-                "query failed, error: {}",
+                "query failed, error: {}\r\n",
                 status.error,
             ));
 
@@ -202,7 +202,7 @@ pub extern "C" fn kernel_main(
 
         if status.value != 1 {
             let _ = console::print(format_args!(
-                "target hart is running, value = {}",
+                "target hart is not stopped, state={}\r\n",
                 status.value,
             ));
 
