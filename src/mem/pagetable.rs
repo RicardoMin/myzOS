@@ -61,10 +61,10 @@ pub unsafe fn write_pte(
 /// 条目由当前 Pte 构造器或 empty 生成；
 /// 整个查找期间没有冲突引用、并发修改或回收；
 /// 这棵临时页表尚未交给硬件使用
-pub unsafe fn translate_4k(
+pub unsafe fn lookup_4k(
     root_pa: usize,
     va: usize,
-) -> Option<usize> {
+) -> Option<Pte> {
     let [vpn2, vpn1, vpn0] = vm::vpn_indices(va)?;
 
     let mut current = root_pa;
@@ -89,9 +89,12 @@ pub unsafe fn translate_4k(
         read_pte(current, vpn0)
     };
 
-    pte.is_leaf().then(|| {
-        pte.pa() + vm::page_offset(va)
-    })
+    pte.is_leaf().then_some(pte)
+}
+
+pub unsafe fn translate_4k(root_pa: usize, va: usize) -> Option<usize> {
+    let pte = unsafe { lookup_4k(root_pa, va) }?;
+    Some(pte.pa() + vm::page_offset(va))
 }
 
 

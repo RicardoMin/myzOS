@@ -253,6 +253,23 @@ pub extern "C" fn kernel_main(
         #[cfg(feature = "lab2-tests")]
         mem::selftest::run_primary();
 
+        let before = mem::pmem::free_counts();
+        let root_pa = mem::kernel_vm::build();
+        let after = mem::pmem::free_counts();
+
+        let _ = console::print(format_args!(
+            "kernel_vm: root={:#x}, table_pages={}, data_pages_used={}\r\n",
+            root_pa,
+            before.0 - after.0,
+            before.1 - after.1,
+        ));
+
+        #[cfg(feature = "lab2-tests")]
+        unsafe {
+            // SAFETY: 页表刚由当前 hart 建好，尚未发布或交给硬件使用
+            mem::selftest::check_kernel_mapping(root_pa);
+        }
+
         let _ = console::print(format_args!(
             "myzOS: boot complete, {} harts online\r\n",
             cpu::MAX_HARTS,

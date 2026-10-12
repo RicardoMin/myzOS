@@ -342,3 +342,33 @@ pub fn run_secondary() {
         SECONDARY_DONE.store(round, Ordering::Release);
     }
 }
+
+
+pub unsafe fn check_kernel_mapping(root_pa: usize) {
+    let layout = super::kernel_layout();
+
+    let cases = [
+    (layout.start, PTE_R | PTE_X),
+    (layout.text_end, PTE_R),
+    (layout.rodata_end, PTE_R | PTE_W),
+    (root_pa, PTE_R | PTE_W),
+    (RAM_END - 1, PTE_R | PTE_W),
+    (crate::uart::UART_BASE, PTE_R | PTE_W),
+    ];
+
+    for (va, permissions) in cases {
+        let pte = unsafe {pagetable::lookup_4k(root_pa, va)}
+            .expect("kernel mapping missing");
+
+        assert_eq!(pte.pa() + vm::page_offset(va), va);
+        assert_eq!(pte.flags() & (PTE_R | PTE_W | PTE_X), permissions);
+    }
+
+    assert!(
+        unsafe { pagetable::lookup_4k(root_pa, RAM_START)}.is_none()
+    );
+
+    let _ = console::print(format_args!(
+        "kernel_vm: layout and permissions checked (paging off)\r\n",
+    ));
+}

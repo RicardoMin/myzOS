@@ -2,6 +2,7 @@ pub mod dtb;
 pub mod pmem;
 pub mod vm;
 pub mod pagetable;
+pub mod kernel_vm;
 #[cfg(feature = "lab2-tests")]
 pub mod selftest;
 
