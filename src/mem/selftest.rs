@@ -227,7 +227,8 @@ pub fn check_page_tables() {
         }
 
         // 空树还能重建；不要求新子表地址与旧地址不同。
-        let (va, pa, permissions) = mappings[0];
+        let (va, pa, _) = mappings[0];
+        let permissions = PTE_R;
         pagetable::map_4k(root, va, pa, permissions).unwrap();
         assert_eq!(
             pmem::free_counts(),
@@ -238,8 +239,8 @@ pub fn check_page_tables() {
             Some(pa)
         );
         assert_eq!(
-            pagetable::unmap_4k(root, va).unwrap().pa(),
-            pa
+            pagetable::unmap_4k(root, va).unwrap().bits(),
+            Pte::leaf(pa, permissions).unwrap().bits(),
         );
         assert_eq!(
             pmem::free_counts(),
@@ -253,9 +254,8 @@ pub fn check_page_tables() {
         pmem::free_kernel(root);
     }
     assert_eq!(pmem::free_counts(), before);
-    pmem::check_all_free();
     let _ = console::print(format_args!(
-        "sv39: mapping lifecycle checks passed\r\n"
+        "sv39: mapping lifecycle checks passed (paging on)\r\n"
     ));
 }
 

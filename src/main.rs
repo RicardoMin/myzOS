@@ -13,6 +13,7 @@ mod console;
 mod mem;
 
 
+use core::hint;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use core::fmt::Write;
@@ -30,6 +31,9 @@ static SECONDARY_READY: AtomicBool = AtomicBool::new(false);
 static  SECONDARY_HART: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 static PANICKING: AtomicBool = AtomicBool::new(false);
+
+static KERNEL_ROOT_PA: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_PAGING_READY: AtomicBool = AtomicBool::new(false);
 
 
 #[panic_handler]
@@ -270,6 +274,20 @@ pub extern "C" fn kernel_main(
             mem::selftest::check_kernel_mapping(root_pa);
         }
 
+        unsafe { mem::kernel_vm::enable(root_pa) };
+
+        let _ = console::print(format_args!(
+            "paging: hart={} satp={:#x} Sv39 active\r\n",
+            cpu::hart_id(),
+            mem::kernel_vm::read_satp(),
+        ));
+
+        KERNEL_ROOT_PA.store(root_pa, Ordering::Release);
+
+        while !SECONDARY_PAGING_READY.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+
         let _ = console::print(format_args!(
             "myzOS: boot complete, {} harts online\r\n",
             cpu::MAX_HARTS,
@@ -301,6 +319,26 @@ pub extern "C" fn secondary_main(
 
     #[cfg(feature = "lab2-tests")]
     mem::selftest::run_secondary();
+
+    let root_pa = loop {
+        let root = KERNEL_ROOT_PA.load(Ordering::Acquire);
+
+        if root != 0 {
+            break root;
+        }
+
+        core::hint::spin_loop();
+    };
+
+    unsafe { mem::kernel_vm::enable(root_pa) };
+
+    let _ = console::print(format_args!(
+        "paging: hart={} satp={:#x} Sv39 active\r\n",
+        cpu::hart_id(),
+        mem::kernel_vm::read_satp(),
+    ));
+
+    SECONDARY_PAGING_READY.store(true, Ordering::Release);
 
     loop {}
 }
