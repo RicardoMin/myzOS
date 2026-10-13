@@ -11,9 +11,9 @@ mod irq;
 mod cpu;
 mod console;
 mod mem;
+mod trap;
 
 
-use core::hint;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use core::fmt::Write;
@@ -158,9 +158,6 @@ pub extern "C" fn kernel_main(
         "global page pool is ready\r\n",
     ));
 
-    #[cfg(feature = "lab2-tests")]
-    mem::selftest::check_page_tables();
-
     let probe = sbi::probe_hsm();
 
     let _ = console::print(format_args!(
@@ -186,6 +183,8 @@ pub extern "C" fn kernel_main(
                     result.error,
                 ));
             }
+
+            trap::init_hart();
         }
 
         let target_hart = match _hart_id {
@@ -286,6 +285,19 @@ pub extern "C" fn kernel_main(
 
         while !SECONDARY_PAGING_READY.load(Ordering::Acquire) {
             core::hint::spin_loop();
+        }
+        #[cfg(feature = "lab2-tests")]
+        mem::selftest::check_page_tables();
+
+        #[cfg(feature = "trap-test")]
+        {
+            let _ = console::print(format_args!(
+                "trap-test: triggering breakpoint\r\n",
+            ));
+
+            unsafe {
+                core::arch::asm!("ebreak", options(nostack));
+            }
         }
 
         let _ = console::print(format_args!(

@@ -21,3 +21,4 @@ panic = "abort"
 default = []
 lab1-tests = []
 lab2-tests = []
+trap-test = []
