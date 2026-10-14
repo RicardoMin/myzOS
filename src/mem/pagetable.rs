@@ -92,6 +92,13 @@ pub unsafe fn lookup_4k(
     pte.is_leaf().then_some(pte)
 }
 
+/// 将虚拟地址转化为当前 4 KiB 页表映射的物理地址
+/// 
+/// # Safety
+/// root_pa 及查找经过的非叶子项必须指向存活、已初始化、
+/// 可通过同值地址直接读取的页表页，条目由当前 Pte 构造器生成。
+/// 查找期间不得存在冲突引用、并发修改或回收；
+/// 这棵页表尚未交给硬件使用。
 pub unsafe fn translate_4k(root_pa: usize, va: usize) -> Option<usize> {
     let pte = unsafe { lookup_4k(root_pa, va) }?;
     Some(pte.pa() + vm::page_offset(va))

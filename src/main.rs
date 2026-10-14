@@ -58,12 +58,16 @@ fn panic(info: &PanicInfo<'_>) -> ! {
     }
 }
 
+
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main(
     _hart_id: usize,
     _dtb_pa: usize,
 ) -> ! {
     assert_eq!(cpu::hart_id(), _hart_id);
+
+    // stvec 属于当前 hart；两个启动入口必须各自安装异常入口
+    trap::init_hart();
 
     let _ = console::print(format_args!(
         "myzOS: hart={} dtb={:#x}\r\n", 
@@ -183,8 +187,6 @@ pub extern "C" fn kernel_main(
                     result.error,
                 ));
             }
-
-            trap::init_hart();
         }
 
         let target_hart = match _hart_id {
@@ -273,6 +275,10 @@ pub extern "C" fn kernel_main(
             mem::selftest::check_kernel_mapping(root_pa);
         }
 
+        // =================================== 启动分页 =========================
+
+        // SAFETY: 页表由当前 hart 完整构建，恒等映射覆盖继续执行所需代码、
+        // 栈、数据和设备；根表及下级表继续保留，发布后不再修改或释放
         unsafe { mem::kernel_vm::enable(root_pa) };
 
         let _ = console::print(format_args!(
@@ -290,15 +296,7 @@ pub extern "C" fn kernel_main(
         mem::selftest::check_page_tables();
 
         #[cfg(feature = "trap-test")]
-        {
-            let _ = console::print(format_args!(
-                "trap-test: triggering breakpoint\r\n",
-            ));
-
-            unsafe {
-                core::arch::asm!("ebreak", options(nostack));
-            }
-        }
+        trap::check_return();
 
         let _ = console::print(format_args!(
             "myzOS: boot complete, {} harts online\r\n",
@@ -316,6 +314,8 @@ pub extern "C" fn secondary_main(
     opaque: usize,
 ) -> ! {
     assert_eq!(cpu::hart_id(), hart_id);
+
+    trap::init_hart();
 
     let _ = console::print(format_args!(
         "secondary: hart={} opaque={:#x}\r\n",
@@ -342,6 +342,8 @@ pub extern "C" fn secondary_main(
         core::hint::spin_loop();
     };
 
+    // SAFETY: Acquire 已接收到主 hart 发布的完整恒等页表，映射覆盖本 hart
+    // 继续执行所需的代码、栈、数据和设备；页表持续保留，发布后不再修改或释放。
     unsafe { mem::kernel_vm::enable(root_pa) };
 
     let _ = console::print(format_args!(

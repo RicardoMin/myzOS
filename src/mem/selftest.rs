@@ -1,5 +1,6 @@
-//! Lab2 自检：编码、页表生命周期、页池耗尽与双 hart 分配。
-//! 启动前自检要求单 hart、页池无其他使用者；双 hart 入口每次启动各调用一次。
+//! Lab 2 自检：编码、页池回收、双 hart 分配和页表映射生命周期。
+//! 页池耗尽与双 hart 分配检查在永久内核页表建立前运行。
+//! 映射布局检查在启用分页前运行；临时页表生命周期检查在两核启用分页后运行。
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -343,7 +344,13 @@ pub fn run_secondary() {
     }
 }
 
-
+/// 检查内核恒等映射及各区域的读、写、执行权限。
+///
+/// # Safety
+/// root_pa 必须指向完整、存活、已初始化的内核页表树。
+/// 页表页可通过同值地址直接读取，条目由当前 Pte 构造器生成。
+/// 检查期间不得存在冲突引用、并发修改或回收；
+/// 这棵页表尚未交给硬件使用。
 pub unsafe fn check_kernel_mapping(root_pa: usize) {
     let layout = super::kernel_layout();
 

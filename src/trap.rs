@@ -2,15 +2,36 @@ use core::arch::asm;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::{console, cpu, irq, uart};
+use crate::{cpu, irq, uart};
 
 core::arch::global_asm!(include_str!("trap.S"));
 
 unsafe extern "C" {
     fn _trap_entry();
+
+    #[cfg(feature = "trap-test")]
+    fn _trap_test() -> usize;
+
+    #[cfg(feature = "trap-test")]
+    fn _trap_test_breakpoint();
 }
 
 static TRAP_REPORTED: AtomicBool = AtomicBool::new(false);
+
+
+#[cfg(feature = "trap-test")]
+pub fn check_return() {
+    //SAFETY: 当前 hart 已安装异常入口，并使用有效内核栈；
+    // 指定测试断点会由处理函数识别，恢复现场后返回
+    let value = unsafe { _trap_test() };
+
+    assert_eq!(value, 0x1234);
+
+    let _ = crate::console::print(format_args!(
+        "trap-test: hart={} breakpoint returned, t0 restored\r\n",
+        cpu::hart_id(),
+    ));
+}
 
 
 pub fn init_hart() {
@@ -54,7 +75,7 @@ pub extern "C" fn rust_trap_fatal(
         let _ = write!(
             &mut writer,
             concat!(
-                "TRAP hart={}, interrupt={}, code={:#x}\r\n",
+                "TRAP hart={}, interrupt={}, code={}\r\n",
                 "scause={:#x}, sepc={:#x}, stval={:#x}, sstatus={:#x}, sp={:#x}\r\n",
             ),
             cpu::hart_id(),
@@ -71,4 +92,57 @@ pub extern "C" fn rust_trap_fatal(
     loop {
         core::hint::spin_loop();
     }
+}
+
+#[repr(C)]
+pub struct TrapFrame {
+    pub x: [usize; 32],
+    pub sepc: usize,
+    pub sstatus: usize,
+}
+
+
+const _: () = {
+    assert!(core::mem::size_of::<TrapFrame>() == 272);
+    assert!(core::mem::offset_of!(TrapFrame, sepc) == 256);
+    assert!(core::mem::offset_of!(TrapFrame, sstatus) == 264);
+};
+
+
+/// 接收汇编入口保存的 S 模式整数寄存器现场
+/// 
+/// 汇编入口保证 frame 指向当前内核栈中已完整初始化、独占访问的现场
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_trap(frame: &mut TrapFrame) {
+    let scause: usize;
+    let stval: usize;
+
+    unsafe {
+        asm!(
+            "csrr {cause}, scause",
+            "csrr {value}, stval",
+            cause = out(reg) scause,
+            value = out(reg) stval,
+            options(nostack),
+        );
+    }
+
+    #[cfg(feature = "trap-test")]
+    {
+        let test_pc = _trap_test_breakpoint as *const () as usize;
+        let from_supervisor = frame.sstatus & (1usize << 8) != 0;
+
+        if scause == 3 && frame.sepc == test_pc && from_supervisor {
+            frame.sepc += 4;
+            return;
+        }
+    }
+
+    rust_trap_fatal(
+        scause,
+        frame.sepc,
+        stval,
+        frame.sstatus,
+        frame.x[2],
+    )
 }
