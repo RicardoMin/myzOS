@@ -7,7 +7,7 @@ pub struct SbiRet {
 
 const EID_BASE: usize = 0x10;
 const EID_HSM: usize = 0x48534D;
-
+const EID_TIME: usize = 0x5449_4D45;
 
 
 fn sbi_call1(eid: usize, fid: usize, arg0: usize) -> SbiRet {
@@ -59,4 +59,13 @@ pub unsafe fn hart_start(
     }
 
     SbiRet { error, value }
+}
+
+
+pub fn probe_timer() -> SbiRet {
+    sbi_call1(EID_BASE, 3, EID_TIME)
+}
+
+pub fn set_timer(deadline: usize) -> SbiRet {
+    sbi_call1(EID_TIME, 0, deadline)
 }

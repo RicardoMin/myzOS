@@ -21,8 +21,8 @@ static TRAP_REPORTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "trap-test")]
 pub fn check_return() {
-    //SAFETY: 当前 hart 已安装异常入口，并使用有效内核栈；
-    // 指定测试断点会由处理函数识别，恢复现场后返回
+    // SAFETY: 当前 hart 已安装异常入口，并使用有效内核栈；
+    // 指定测试断点会被处理函数识别，恢复现场后返回
     let value = unsafe { _trap_test() };
 
     assert_eq!(value, 0x1234);
@@ -125,6 +125,23 @@ pub extern "C" fn rust_trap(frame: &mut TrapFrame) {
             value = out(reg) stval,
             options(nostack),
         );
+    }
+
+    assert!(
+        frame.sstatus & (1usize << 8) != 0,
+        "trap: expected S-mode origin",
+    );
+
+    assert!(
+        !irq::enabled(),
+        "trap: interrupts must remain disabled",
+    );
+
+    let timer_interrupt = (1usize << 63) | 5;
+
+    if scause == timer_interrupt {
+        crate::timer::on_interrupt();
+        return;
     }
 
     #[cfg(feature = "trap-test")]

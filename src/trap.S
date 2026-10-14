@@ -55,6 +55,7 @@ _trap_entry:
     csrw sepc, t0
 
     ld t0, 264(sp)
+    # 保持 SIE = 0，避免恢复现场期间响应中断；最后由 sret 根据 SPIE 恢复
     andi t0, t0, -3
     csrw sstatus, t0
 

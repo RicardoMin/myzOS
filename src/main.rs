@@ -12,6 +12,7 @@ mod cpu;
 mod console;
 mod mem;
 mod trap;
+mod timer;
 
 
 use core::panic::PanicInfo;
@@ -68,6 +69,7 @@ pub extern "C" fn kernel_main(
 
     // stvec 属于当前 hart；两个启动入口必须各自安装异常入口
     trap::init_hart();
+    timer::init(_hart_id);
 
     let _ = console::print(format_args!(
         "myzOS: hart={} dtb={:#x}\r\n", 
@@ -298,10 +300,44 @@ pub extern "C" fn kernel_main(
         #[cfg(feature = "trap-test")]
         trap::check_return();
 
+        timer::init_hart();
+
+        let _ = console::print(format_args!(
+            "timer: hart={} armed, interval={} time counts\r\n",
+            cpu::hart_id(),
+            timer::TIMER_INTERVAL,
+        ));
+
         let _ = console::print(format_args!(
             "myzOS: boot complete, {} harts online\r\n",
             cpu::MAX_HARTS,
         ));
+
+        // SAFETY: 本 hart 已安装异常入口并安排首次定时器事件；
+        // 已使能的定时器来源有对应处理逻辑，当前没有持锁或未结束的临界区
+        unsafe { irq::enable() };
+
+        let mut reported = 0usize;
+
+        loop {
+            let now = timer::ticks();
+
+            if now.wrapping_sub(reported) >= 10 {
+                reported = now;
+
+                let _ = console::print(format_args!(
+                    "timer: ticks={} irq[h0]={} irq[h1]={} boot={}\r\n",
+                    now,
+                    timer::interrupt_count(0),
+                    timer::interrupt_count(1),
+                    _hart_id,
+                ));
+            }
+
+            unsafe {
+                core::arch::asm!("wfi", options(nostack));
+            }
+        }
     }
 
     loop {}
@@ -352,7 +388,24 @@ pub extern "C" fn secondary_main(
         mem::kernel_vm::read_satp(),
     ));
 
+    #[cfg(feature = "trap-test")]
+    trap::check_return();
+
+    timer::init_hart();
+
+    let _ = console::print(format_args!(
+        "timer: hart={} armed, interval={} time counts\r\n",
+        cpu::hart_id(),
+        timer::TIMER_INTERVAL,
+    ));
+
     SECONDARY_PAGING_READY.store(true, Ordering::Release);
 
-    loop {}
+    unsafe { irq::enable() };
+
+    loop {
+        unsafe {
+            core::arch::asm!("wfi", options(nostack));
+        }
+    }
 }
