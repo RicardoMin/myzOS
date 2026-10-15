@@ -49,17 +49,8 @@ fn schedule_next() {
 }
 
 pub fn init_hart() {
-    let mut sstatus: usize;
+    assert!(!irq::enabled());
 
-    unsafe {
-        asm!(
-            "csrr {status}, sstatus",
-            status = out(reg) sstatus,
-            options(nostack),
-        );
-    }
-
-    assert_eq!(sstatus & (1 << 1), 0);
     assert_eq!(irq::depth(), 0);
     assert!(BOOT_HART.load(Ordering::Acquire) < cpu::MAX_HARTS);
 

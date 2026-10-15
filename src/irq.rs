@@ -137,7 +137,7 @@ pub unsafe fn restore(was_enabled: bool) {
 /// 
 /// # Safety
 /// 当前 hart 必须已安装有效异常入口，并具备有效内核栈；
-/// 所有已是能的中断来源都必须有可用的处理逻辑
+/// 所有已使能的中断来源都必须有可用的处理逻辑
 /// 调用时不得处于尚未结束的关中断临界区
 pub unsafe fn enable() {
     assert_eq!(depth(), 0);

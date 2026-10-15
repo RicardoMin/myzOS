@@ -4,11 +4,8 @@ use super::{
     vm::{PTE_R, PTE_W, PTE_X},
 };
 use crate::{irq, uart::UART_BASE};
+use crate::plic::{PLIC_BASE, PLIC_SIZE};
 use core::arch::asm;
-
-
-pub(crate) const PLIC_BASE: usize = 0x0c00_0000;
-pub(crate) const PLIC_SIZE: usize = 0x0400_0000;
 
 
 pub fn build() -> usize {

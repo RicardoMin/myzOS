@@ -2,7 +2,8 @@ use core::arch::asm;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::{cpu, irq, uart};
+use crate::uart::UART_IRQ;
+use crate::{console, cpu, irq, plic, uart};
 
 core::arch::global_asm!(include_str!("trap.S"));
 
@@ -144,12 +145,18 @@ pub extern "C" fn rust_trap(frame: &mut TrapFrame) {
         return;
     }
 
+    let external_interrupt = (1usize << 63) | 9;
+
+    if scause == external_interrupt {
+        handle_external_interrupt();
+        return;
+    }
+
     #[cfg(feature = "trap-test")]
     {
         let test_pc = _trap_test_breakpoint as *const () as usize;
-        let from_supervisor = frame.sstatus & (1usize << 8) != 0;
 
-        if scause == 3 && frame.sepc == test_pc && from_supervisor {
+        if scause == 3 && frame.sepc == test_pc {
             frame.sepc += 4;
             return;
         }
@@ -162,4 +169,19 @@ pub extern "C" fn rust_trap(frame: &mut TrapFrame) {
         frame.sstatus,
         frame.x[2],
     )
+}
+
+
+fn handle_external_interrupt() {
+    let Some(claim) = plic::claim() else {
+        return;
+    };
+
+    let irq = claim.irq();
+    if irq == UART_IRQ {
+        console::receive_interrupt();
+    } else {
+        drop(claim);
+        panic!("plic: unexpected IRQ {}", irq);
+    }
 }

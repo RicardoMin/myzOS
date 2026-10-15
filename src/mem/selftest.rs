@@ -10,7 +10,7 @@ use super::{
     pmem,
     vm::{self, PTE_R, PTE_W, PTE_X, Pte},
 };
-use crate::{console, cpu, mem::kernel_vm::{PLIC_BASE, PLIC_SIZE}, spinlock::SpinLock};
+use crate::{console, cpu, plic::{PLIC_BASE, PLIC_SIZE}, spinlock::SpinLock};
 
 const ROUNDS: usize = 128;
 static HELD: SpinLock<[[usize; 2]; 2]> = SpinLock::new([[0; 2]; 2]);

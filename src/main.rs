@@ -13,6 +13,7 @@ mod console;
 mod mem;
 mod trap;
 mod timer;
+mod plic;
 
 
 use core::panic::PanicInfo;
@@ -302,6 +303,16 @@ pub extern "C" fn kernel_main(
 
         timer::init_hart();
 
+        plic::init_uart(_hart_id);
+        uart::enable_rx_interrupt();
+        unsafe {
+            core::arch::asm!(
+                "csrs sie, {mask}",
+                mask = in(reg) (1usize << 9),
+                options(nostack),
+            );
+        }
+
         let _ = console::print(format_args!(
             "timer: hart={} armed, interval={} time counts\r\n",
             cpu::hart_id(),
@@ -313,8 +324,7 @@ pub extern "C" fn kernel_main(
             cpu::MAX_HARTS,
         ));
 
-        // SAFETY: 本 hart 已安装异常入口并安排首次定时器事件；
-        // 已使能的定时器来源有对应处理逻辑，当前没有持锁或未结束的临界区
+        // SAFETY: 本 hart 的异常入口和已使能来源的处理逻辑已就绪，当前不持锁
         unsafe { irq::enable() };
 
         let mut reported = 0usize;
@@ -322,7 +332,7 @@ pub extern "C" fn kernel_main(
         loop {
             let now = timer::ticks();
 
-            if now.wrapping_sub(reported) >= 10 {
+            if reported == 0 && now >= 10 {
                 reported = now;
 
                 let _ = console::print(format_args!(
