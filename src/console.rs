@@ -18,16 +18,12 @@ pub fn print(args: fmt::Arguments<'_>) -> fmt::Result {
     result
 }
 
-pub fn receive_interrupt() {
+pub fn echo_byte(byte: u8) {
     let _guard = CONSOLE_LOCK.lock();
     cpu::io_fence();
     let mut writer = uart::Writer::new();
 
     for _ in 0..32 {
-        let Some(byte) = uart::try_read() else {
-            break;
-        };
-
         match byte {
             b'\r' | b'\n' => {
                 writer.put_byte(b'\r');

@@ -14,6 +14,7 @@ mod mem;
 mod trap;
 mod timer;
 mod plic;
+mod input;
 
 
 use core::panic::PanicInfo;
@@ -344,9 +345,33 @@ pub extern "C" fn kernel_main(
                 ));
             }
 
-            unsafe {
-                core::arch::asm!("wfi", options(nostack));
+            for _ in 0..32 {
+                let Some(byte) = input::pop() else {
+                    break;
+                };
+
+                console::echo_byte(byte);
             }
+
+            let dropped = input::take_dropped();
+
+            if dropped != 0 {
+                let _ = console::print(format_args!(
+                    "\r\nconsole: RX queue full, dropped {} bytes\r\n",
+                    dropped,
+                ));
+            }
+
+            irq::push_off();
+
+            if input::is_empty() {
+                unsafe {
+                    core::arch::asm!("wfi", options(nostack));
+                }
+            }
+
+            // SAFETY: 同一 hart 上配对此处 push_off，期间保持关中断
+            unsafe { irq::pop_off() };
         }
     }
 

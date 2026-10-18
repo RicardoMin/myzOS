@@ -39,11 +39,9 @@ impl Writer {
     }
 
     pub(crate)fn put_byte(&mut self, byte: u8) {
-        unsafe {
-            while (read8(LSR) & LSR_THRE) == 0 {}
+        while (read8(LSR) & LSR_THRE) == 0 {}
 
-            write8(THR, byte);
-        }
+        write8(THR, byte);
     }
 }
 
@@ -68,8 +66,7 @@ pub fn enable_rx_interrupt() {
 
 
 pub fn try_read() -> Option<u8> {
-    let lsr = read8(LSR);
-    if (lsr & LSR_DR) == 0 {
+    if (read8(LSR) & LSR_DR) == 0 {
         return None;
     }
 

@@ -2,8 +2,7 @@ use core::arch::asm;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::uart::UART_IRQ;
-use crate::{console, cpu, irq, plic, uart};
+use crate::{cpu, input, irq, plic, uart};
 
 core::arch::global_asm!(include_str!("trap.S"));
 
@@ -178,8 +177,8 @@ fn handle_external_interrupt() {
     };
 
     let irq = claim.irq();
-    if irq == UART_IRQ {
-        console::receive_interrupt();
+    if irq == uart::UART_IRQ {
+        input::receive_interrupt();
     } else {
         drop(claim);
         panic!("plic: unexpected IRQ {}", irq);
