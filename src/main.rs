@@ -16,6 +16,7 @@ mod timer;
 mod plic;
 mod input;
 mod line;
+mod shell;
 
 
 use core::panic::PanicInfo;
@@ -326,27 +327,16 @@ pub extern "C" fn kernel_main(
             cpu::MAX_HARTS,
         ));
 
+        let _ = console::print(format_args!(
+            "myzOS console ready. Type help and press Enter.\r\n",
+        ));
+
         // SAFETY: 本 hart 的异常入口和已使能来源的处理逻辑已就绪，当前不持锁
         unsafe { irq::enable() };
 
-        let mut reported = 0usize;
         let mut editor = line::LineEditor::new();
 
         loop {
-            let now = timer::ticks();
-
-            if reported == 0 && now >= 10 {
-                reported = now;
-
-                let _ = console::print(format_args!(
-                    "timer: ticks={} irq[h0]={} irq[h1]={} boot={}\r\n",
-                    now,
-                    timer::interrupt_count(0),
-                    timer::interrupt_count(1),
-                    _hart_id,
-                ));
-            }
-
             for _ in 0..32 {
                 let Some(event) = input::next_event() else {
                     break;
@@ -355,11 +345,7 @@ pub extern "C" fn kernel_main(
                 match event {
                     input::InputEvent::Byte(byte) => {
                         if let Some(text) = editor.feed(byte) {
-                            let _ = console::print(format_args!(
-                                "line: len={} text=\"{}\"\r\n",
-                                text.len(),
-                                text,
-                            ));
+                            shell::execute(text);
                         }
                     }
                     input::InputEvent::Lost(count) => {

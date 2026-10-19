@@ -30,6 +30,6 @@ pub fn echo_byte(byte: u8) {
         }
         b' '..=b'~' => writer.put_byte(byte),
         _ => {}
-        }
+    }
     cpu::io_fence();
 }

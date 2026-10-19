@@ -58,7 +58,7 @@ impl LineEditor {
                     ));
                 }
                 None
-            } 
+            }
             b' '..=b'~' => {
                 if self.len == LINE_CAPACITY {
                     self.len = 0;
