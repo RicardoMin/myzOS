@@ -46,19 +46,8 @@ impl RxQueue {
 
 static RX: SpinLock<RxQueue> = SpinLock::new(RxQueue::new());
 
-pub fn pop() -> Option<u8> {
-    RX.lock().pop()
-}
-
 pub fn is_empty() -> bool {
     RX.lock().len == 0
-}
-
-pub fn take_dropped() -> usize {
-    let mut guard = RX.lock();
-    let dropped = guard.dropped;
-    guard.dropped = 0;
-    dropped
 }
 
 pub fn receive_interrupt() {
@@ -70,5 +59,26 @@ pub fn receive_interrupt() {
         };
 
         queue.push(byte)
+    }
+}
+
+
+pub enum InputEvent {
+    Byte(u8),
+    Lost(usize),
+}
+
+
+pub fn next_event() -> Option<InputEvent> {
+    let mut queue = RX.lock();
+
+    if queue.dropped != 0 {
+        let dropped = queue.dropped;
+        queue.dropped = 0;
+        queue.read = 0;
+        queue.len = 0;
+        Some(InputEvent::Lost(dropped))
+    } else {
+        queue.pop().map(InputEvent::Byte)
     }
 }

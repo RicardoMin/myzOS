@@ -15,6 +15,7 @@ mod trap;
 mod timer;
 mod plic;
 mod input;
+mod line;
 
 
 use core::panic::PanicInfo;
@@ -329,6 +330,7 @@ pub extern "C" fn kernel_main(
         unsafe { irq::enable() };
 
         let mut reported = 0usize;
+        let mut editor = line::LineEditor::new();
 
         loop {
             let now = timer::ticks();
@@ -346,20 +348,24 @@ pub extern "C" fn kernel_main(
             }
 
             for _ in 0..32 {
-                let Some(byte) = input::pop() else {
+                let Some(event) = input::next_event() else {
                     break;
                 };
 
-                console::echo_byte(byte);
-            }
-
-            let dropped = input::take_dropped();
-
-            if dropped != 0 {
-                let _ = console::print(format_args!(
-                    "\r\nconsole: RX queue full, dropped {} bytes\r\n",
-                    dropped,
-                ));
+                match event {
+                    input::InputEvent::Byte(byte) => {
+                        if let Some(text) = editor.feed(byte) {
+                            let _ = console::print(format_args!(
+                                "line: len={} text=\"{}\"\r\n",
+                                text.len(),
+                                text,
+                            ));
+                        }
+                    }
+                    input::InputEvent::Lost(count) => {
+                        editor.on_input_lost(count);
+                    }
+                }
             }
 
             irq::push_off();

@@ -23,15 +23,13 @@ pub fn echo_byte(byte: u8) {
     cpu::io_fence();
     let mut writer = uart::Writer::new();
 
-    for _ in 0..32 {
-        match byte {
-            b'\r' | b'\n' => {
-                writer.put_byte(b'\r');
-                writer.put_byte(b'\n');
-            }
-            b' '..=b'~' => writer.put_byte(byte),
-            _ => {}
+    match byte {
+        b'\r' | b'\n' => {
+            writer.put_byte(b'\r');
+            writer.put_byte(b'\n');
         }
-    }
+        b' '..=b'~' => writer.put_byte(byte),
+        _ => {}
+        }
     cpu::io_fence();
 }
