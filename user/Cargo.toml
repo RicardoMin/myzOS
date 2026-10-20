@@ -1,0 +1,16 @@
+[package]
+name = "myzos-user"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "init"
+path = "src/main.rs"
+test = false
+bench = false
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
