@@ -341,6 +341,9 @@ pub extern "C" fn kernel_main(
             context_test::run();
         }
 
+        #[cfg(feature = "user-vm-test")]
+        mem::user_vm::check();
+
         // SAFETY: 本 hart 的异常入口和已使能来源的处理逻辑已就绪，当前不持锁
         unsafe { irq::enable() };
 

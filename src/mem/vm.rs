@@ -33,11 +33,11 @@ pub const PTE_W: usize = 1 << 2;
 pub const PTE_X: usize = 1 << 3;
 pub const PTE_A: usize = 1 << 6;
 pub const PTE_D: usize = 1 << 7;
+pub const PTE_U: usize = 1 << 4;
 
 const PPN_MASK: usize = (1usize << 44) - 1;
 const FLAGS_MASK: usize = (1usize << 10) - 1;
-const LEAF_PERMISSIONS: usize = PTE_R | PTE_W | PTE_X;
-
+const LEAF_PERMISSIONS: usize = PTE_R | PTE_W | PTE_X | PTE_U;
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
@@ -91,7 +91,7 @@ impl Pte {
     pub fn leaf(pa: usize, permissions: usize) -> Option<Self> {
         let address_bits = encode_pa(pa)?;
 
-        if permissions == 0 {
+        if permissions & (PTE_R | PTE_X) == 0 {
             return None;
         }
         if permissions & !LEAF_PERMISSIONS != 0 {

@@ -5,6 +5,8 @@ pub mod pagetable;
 pub mod kernel_vm;
 #[cfg(feature = "lab2-tests")]
 pub mod selftest;
+#[cfg(feature = "user-vm-test")]
+pub mod user_vm;
 
 
 pub const PAGE_SIZE: usize = 4096;

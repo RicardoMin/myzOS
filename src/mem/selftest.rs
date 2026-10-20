@@ -129,7 +129,8 @@ pub fn check_vm_encoding() {
     assert!(Pte::table(1usize << 56).is_none());
     assert!(Pte::leaf(pa + 1, PTE_R).is_none());
     assert!(Pte::leaf(pa, PTE_W).is_none());
-    assert!(Pte::leaf(pa, PTE_R | (1 << 4)).is_none());
+    assert!(Pte::leaf(pa, PTE_R | (1 << 5)).is_none());
+    assert!(Pte::leaf(pa, vm::PTE_U).is_none());
 
     let _ = console::print(format_args!(
         "sv39: encoding checks passed\r\n"
