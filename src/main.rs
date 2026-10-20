@@ -4,6 +4,10 @@
 
 #[cfg(feature = "lab1-tests")]
 mod selftest;
+#[cfg(feature = "context-test")]
+mod context;
+#[cfg(feature = "context-test")]
+mod context_test;
 mod uart;
 mod sbi;
 mod spinlock;
@@ -330,6 +334,12 @@ pub extern "C" fn kernel_main(
         let _ = console::print(format_args!(
             "myzOS console ready. Type help and press Enter.\r\n",
         ));
+
+        #[cfg(feature = "context-test")]
+        unsafe {
+            // SAFETY: 仅启动 hart 调用一次，当前关中断不持锁
+            context_test::run();
+        }
 
         // SAFETY: 本 hart 的异常入口和已使能来源的处理逻辑已就绪，当前不持锁
         unsafe { irq::enable() };
