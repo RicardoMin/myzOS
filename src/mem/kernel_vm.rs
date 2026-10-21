@@ -3,6 +3,10 @@ use super::{
     kernel_layout, pagetable, pmem,
     vm::{PTE_R, PTE_W, PTE_X},
 };
+use super::layout::{
+    KSTACK_BOTTOM,
+    KSTACK_TOP,
+};
 use crate::{irq, uart::UART_BASE};
 use crate::plic::{PLIC_BASE, PLIC_SIZE};
 use core::arch::asm;
@@ -32,6 +36,15 @@ pub fn build() -> usize {
                     .expect("kernel mapping failed")
             };
         }
+    }
+
+    for va in (KSTACK_BOTTOM..KSTACK_TOP).step_by(PAGE_SIZE) {
+        let pa = pmem::alloc_kernel();
+
+        unsafe {
+            pagetable::map_4k(root, va, pa, PTE_R | PTE_W)
+                .expect("cannot map kernel stack");
+        };
     }
 
     root

@@ -10,6 +10,9 @@ use super::{
     pmem,
     vm::{self, PTE_R, PTE_W, PTE_X, Pte},
 };
+use super::layout::{
+    KSTACK_BOTTOM, KSTACK_GUARD, KSTACK_TOP,
+};
 use crate::{console, cpu, plic::{PLIC_BASE, PLIC_SIZE}, spinlock::SpinLock};
 
 const ROUNDS: usize = 128;
@@ -377,6 +380,24 @@ pub unsafe fn check_kernel_mapping(root_pa: usize) {
     assert!(
         unsafe { pagetable::lookup_4k(root_pa, RAM_START)}.is_none()
     );
+
+    for va in (KSTACK_BOTTOM..KSTACK_TOP).step_by(PAGE_SIZE) {
+        let pte = unsafe {
+            pagetable::lookup_4k(root_pa, va)
+        }
+        .expect("kernel stack mapping missing");
+
+        assert_eq!(
+            pte.flags() & (PTE_R | PTE_W | PTE_X | vm::PTE_U),
+            PTE_R | PTE_W,
+        );
+    }
+
+    for va in [KSTACK_GUARD, KSTACK_TOP] {
+        assert!(
+            unsafe { pagetable::lookup_4k(root_pa, va) }.is_none()
+        );
+    }
 
     let _ = console::print(format_args!(
         "kernel_vm: layout and permissions checked (paging off)\r\n",

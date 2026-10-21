@@ -273,7 +273,7 @@ pub extern "C" fn kernel_main(
         let after = mem::pmem::free_counts();
 
         let _ = console::print(format_args!(
-            "kernel_vm: root={:#x}, table_pages={}, data_pages_used={}\r\n",
+            "kernel_vm: root={:#x}, kernel_pages_used={}, data_pages_used={}\r\n",
             root_pa,
             before.0 - after.0,
             before.1 - after.1,

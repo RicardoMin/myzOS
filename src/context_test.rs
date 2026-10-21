@@ -6,17 +6,7 @@ use crate::{
     context::{Context, arch_switch},
     cpu, irq,
 };
-
-const STACK_SIZE: usize = 16 * 1024;
-
-#[repr(C, align(16))]
-struct TestStack {
-    _bytes: [u8; STACK_SIZE],
-}
-
-static mut STACK: TestStack = TestStack {
-    _bytes: [0; STACK_SIZE],
-};
+use crate::mem::layout::{KSTACK_BOTTOM, KSTACK_TOP};
 
 static mut BOOT: Context = Context::ZERO;
 static mut DEMO: Context = Context::ZERO;
@@ -24,8 +14,6 @@ static ROUNDS: AtomicUsize = AtomicUsize::new(0);
 
 
 extern "C" fn entry() -> ! {
-    let bottom = (&raw mut STACK) as *mut u8 as usize;
-
     let sp: usize;
     unsafe {
         asm!(
@@ -35,7 +23,7 @@ extern "C" fn entry() -> ! {
         );
     }
 
-    assert!((bottom..bottom + STACK_SIZE).contains(&sp));
+    assert!(KSTACK_BOTTOM <= sp && sp <= KSTACK_TOP);
     assert_eq!(sp % 16, 0);
 
     let mut round = 0usize;
@@ -52,18 +40,18 @@ extern "C" fn entry() -> ! {
 
 
 /// # Safety
-/// 仅启动 hart 调用一次；关中断且不持锁，独占本模块上下文和栈
+/// 仅启动 hart 调用一次；关中断且不持锁
+/// 已启用包含 KSTACK 映射的内核页表，独占该栈和测试上下文
 pub unsafe fn run() {
     assert!(!irq::enabled());
     assert_eq!(irq::depth(), 0);
 
     let hart = cpu::hart_id();
-    let top = (&raw mut STACK) as *mut u8 as usize + STACK_SIZE;
 
     unsafe {
         (&raw mut DEMO).write(Context {
             ra: entry as *const () as usize,
-            sp: top,
+            sp: KSTACK_TOP,
             saved: [0; 12],
         });
     }
@@ -79,8 +67,12 @@ pub unsafe fn run() {
         assert_eq!(irq::depth(), 0);
     }
 
+    unsafe {
+        (&raw mut DEMO).write(Context::ZERO);
+    }
+
     let _ = console::print(format_args!(
-        "context-test: hart={} rounds=2 stack restored\r\n",
+        "context-test: hart={} rounds=2 guarded kernel checked (boot stack restored)\r\n",
         hart,
     ));
 }

@@ -6,9 +6,9 @@ use super::{
 };
 use crate::console;
 
-pub const USER_ENTRY: usize = 0x1000;
-pub const USER_STACK_BOTTOM: usize = (1usize << 38) - 3 * PAGE_SIZE;
-pub const USER_STACK_TOP: usize = USER_STACK_BOTTOM + PAGE_SIZE;
+use super::layout::{
+    USER_ENTRY, USER_STACK_BOTTOM, USER_STACK_TOP,
+};
 
 pub struct UserSpace {
     root_pa: usize,
@@ -46,7 +46,7 @@ impl UserSpace {
                 stack_pa,
                 PTE_R | PTE_W | PTE_U,
             )
-            .expect("cannot map user stack");
+            .expect("cannot map user image");
         }
 
         Self {
@@ -71,6 +71,8 @@ impl UserSpace {
             pagetable::unmap_4k(self.root_pa, USER_STACK_BOTTOM)
                 .expect("user stack missing")
         };
+
+        assert_eq!(old_stack.pa(), self.stack_pa);
 
         unsafe {
             pmem::free_data(self.image_pa);

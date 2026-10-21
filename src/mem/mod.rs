@@ -3,6 +3,7 @@ pub mod pmem;
 pub mod vm;
 pub mod pagetable;
 pub mod kernel_vm;
+pub mod layout;
 #[cfg(feature = "lab2-tests")]
 pub mod selftest;
 #[cfg(feature = "user-vm-test")]
