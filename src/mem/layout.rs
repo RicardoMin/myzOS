@@ -11,6 +11,6 @@ pub const USER_STACK_BOTTOM: usize = USER_STACK_TOP - PAGE_SIZE;
 
 pub const KSTACK_PAGES: usize = 4;
 pub const KSTACK_TOP: usize = USER_STACK_BOTTOM;
-pub const KSTACK_BOTTOM: usize = 
+pub const KSTACK_BOTTOM: usize =
     KSTACK_TOP - KSTACK_PAGES * PAGE_SIZE;
 pub const KSTACK_GUARD: usize = KSTACK_BOTTOM - PAGE_SIZE;

@@ -72,7 +72,7 @@ pub unsafe fn run() {
     }
 
     let _ = console::print(format_args!(
-        "context-test: hart={} rounds=2 guarded kernel checked (boot stack restored)\r\n",
+        "context-test: hart={} rounds=2 guarded kernel stack checked (boot stack restored)\r\n",
         hart,
     ));
 }

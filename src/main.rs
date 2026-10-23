@@ -1,13 +1,6 @@
 #![no_std]
 #![no_main]
 
-
-#[cfg(feature = "lab1-tests")]
-mod selftest;
-#[cfg(feature = "context-test")]
-mod context;
-#[cfg(feature = "context-test")]
-mod context_test;
 mod uart;
 mod sbi;
 mod spinlock;
@@ -21,6 +14,19 @@ mod plic;
 mod input;
 mod line;
 mod shell;
+#[cfg(feature = "lab1-tests")]
+mod selftest;
+#[cfg(any(
+    feature = "context-test",
+    feature = "user-vm-test",
+))]
+mod context;
+#[cfg(feature = "context-test")]
+mod context_test;
+#[cfg(feature = "user-vm-test")]
+mod user_frame;
+#[cfg(feature = "user-vm-test")]
+mod proc;
 
 
 use core::panic::PanicInfo;
@@ -342,7 +348,7 @@ pub extern "C" fn kernel_main(
         }
 
         #[cfg(feature = "user-vm-test")]
-        mem::user_vm::check();
+        proc::check();
 
         // SAFETY: 本 hart 的异常入口和已使能来源的处理逻辑已就绪，当前不持锁
         unsafe { irq::enable() };
