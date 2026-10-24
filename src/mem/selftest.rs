@@ -8,12 +8,14 @@ use super::{
     PAGE_SIZE, RAM_END, RAM_START,
     pagetable::{self, MapError, UnmapError},
     pmem,
-    vm::{self, PTE_R, PTE_W, PTE_X, Pte},
+    vm::{self, PTE_R, PTE_W, PTE_X, PTE_U, Pte},
 };
 use super::layout::{
-    KSTACK_BOTTOM, KSTACK_GUARD, KSTACK_TOP,
+    KSTACK_BOTTOM, KSTACK_GUARD, KSTACK_TOP, TRAMPOLINE,
 };
 use crate::{console, cpu, plic::{PLIC_BASE, PLIC_SIZE}, spinlock::SpinLock};
+use crate::trampoline;
+
 
 const ROUNDS: usize = 128;
 static HELD: SpinLock<[[usize; 2]; 2]> = SpinLock::new([[0; 2]; 2]);
@@ -396,6 +398,22 @@ pub unsafe fn check_kernel_mapping(root_pa: usize) {
     for va in [KSTACK_GUARD, KSTACK_TOP] {
         assert!(
             unsafe { pagetable::lookup_4k(root_pa, va) }.is_none()
+        );
+    }
+
+    let trampoline_pa = trampoline::pa();
+
+    for va in [trampoline_pa, TRAMPOLINE] {
+        let pte = unsafe {
+            pagetable::lookup_4k(root_pa, va)
+        }
+        .expect("kernel trampoline mapping missing");
+
+        assert_eq!(pte.pa(), trampoline_pa);
+        
+        assert_eq!(
+            pte.flags() & (PTE_R | PTE_W | PTE_X | PTE_U),
+            PTE_R | PTE_X,
         );
     }
 

@@ -14,6 +14,7 @@ mod plic;
 mod input;
 mod line;
 mod shell;
+mod trampoline;
 #[cfg(feature = "lab1-tests")]
 mod selftest;
 #[cfg(any(

@@ -12,6 +12,7 @@ use super::layout::{
     TRAMPOLINE,
     KSTACK_BOTTOM,
 };
+use crate::trampoline;
 
 pub struct UserSpace {
     root_pa: usize,
@@ -65,6 +66,14 @@ impl UserSpace {
             )
             .expect("cannot map user frame");
 
+            pagetable::map_4k(
+                root_pa,
+                TRAMPOLINE,
+                trampoline::pa(),
+                PTE_R | PTE_X,
+            )
+            .expect("cannot map trampoline");
+
         }
 
         Self {
@@ -77,7 +86,7 @@ impl UserSpace {
 
     /// # Safety
     /// 页表从未被任何 hart 启用；独占所有页面，所有借用和访问已经结束
-    /// 映射仍由本对象管理，未被外部修改
+    /// 映射未被外部修改, trampoline 是永久只读共享页，本对象不拥有它
     pub unsafe fn destroy(self) {
         let old = unsafe {
             pagetable::unmap_4k(self.root_pa, USER_ENTRY)
@@ -100,6 +109,13 @@ impl UserSpace {
 
         assert_eq!(old_frame.pa(), self.frame_pa);
 
+        let old_trampoline = unsafe {
+            pagetable::unmap_4k(self.root_pa, TRAMPOLINE)
+                .expect("trampoline missing")
+        };
+
+        assert_eq!(old_trampoline.pa(), trampoline::pa());
+
         unsafe {
             pmem::free_data(self.image_pa);
             pmem::free_data(self.stack_pa);
@@ -109,8 +125,9 @@ impl UserSpace {
     }
 
     /// # Safety
-    /// 地址空间从未启用，所有页面存活且有调用者独占，映射未被外部修改
-    pub unsafe fn check_layout(&self, image: &[u8]) {
+    /// 页表从未启用，页表及私有页由调用者独占且存活，映射未被外部修改
+    /// 共享 trampoline 页持续有效且不可修改
+    pub(crate) unsafe fn check_layout(&self, image: &[u8]) {
         // SAFETY: 当前独占整个地址空间，页表从未交给硬件
         unsafe {
             for (va, pa, permissions) in [
@@ -128,10 +145,15 @@ impl UserSpace {
                     USER_FRAME,
                     self.frame_pa,
                     PTE_R | PTE_W,
-                )
+                ),
+                (
+                    TRAMPOLINE,
+                    trampoline::pa(),
+                    PTE_R | PTE_X,
+                ),
             ] {
                 let pte = pagetable::lookup_4k(self.root_pa, va)
-                    .expect("user mapping missing");
+                    .expect("cannot map user image");
 
                 assert_eq!(pte.pa(), pa);
                 assert_eq!(
@@ -154,9 +176,7 @@ impl UserSpace {
                 );
                 assert!(stack.iter().all(|&byte| byte == 0));
 
-                let frame = unsafe {
-                    &*(self.frame_pa as *const UserFrame)
-                };
+                let frame = &*(self.frame_pa as *const UserFrame);
 
                 assert_eq!(frame.regs.sepc, USER_ENTRY);
                 assert_eq!(frame.regs.x[2], USER_STACK_TOP);
@@ -165,7 +185,6 @@ impl UserSpace {
             for va in [
                 0,
                 0x8020_0000,
-                TRAMPOLINE,
                 KSTACK_BOTTOM,
             ] {
                 assert!(pagetable::lookup_4k(self.root_pa, va).is_none());

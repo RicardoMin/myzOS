@@ -6,9 +6,11 @@ use super::{
 use super::layout::{
     KSTACK_BOTTOM,
     KSTACK_TOP,
+    TRAMPOLINE,
 };
 use crate::{irq, uart::UART_BASE};
 use crate::plic::{PLIC_BASE, PLIC_SIZE};
+use crate::trampoline;
 use core::arch::asm;
 
 
@@ -45,6 +47,11 @@ pub fn build() -> usize {
             pagetable::map_4k(root, va, pa, PTE_R | PTE_W)
                 .expect("cannot map kernel stack");
         };
+    }
+
+    unsafe {
+        pagetable::map_4k(root, TRAMPOLINE, trampoline::pa(), PTE_R | PTE_X)
+            .expect("cannot map trampoline");
     }
 
     root

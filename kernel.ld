@@ -12,6 +12,20 @@ SECTIONS
     }
 
     . = ALIGN(4096);
+    .trampoline : {
+        __trampoline_start = .;
+        KEEP(*(.trampoline))
+        __trampoline_code_end = .;
+
+        . = ALIGN(4096);
+        __trampoline_end = .;
+
+        ASSERT(__trampoline_code_end > __trampoline_start,
+                "trampoline is empty")
+        ASSERT(__trampoline_end - __trampoline_start == 4096,
+                "trampoline must fit in one page")
+    }
+    . = ALIGN(4096);
     __text_end = .;
 
     .rodata : ALIGN(16) {

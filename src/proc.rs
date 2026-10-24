@@ -54,6 +54,10 @@ impl Process {
 }
 
 pub fn check() {
+    unsafe {
+        crate::trampoline::check_alias();
+    }
+
     let image = include_bytes!(env!("MYZOS_USER_IMAGE"));
 
     let before = pmem::free_counts();
@@ -78,10 +82,10 @@ pub fn check() {
 
     unsafe {
         process.destroy();
-        assert_eq!(pmem::free_counts(), before);
     }
+    assert_eq!(pmem::free_counts(), before);
 
     let _ = console::print(format_args!(
-        "precess: frame mapping and resource reclaim checks passed (not runnable)\r\n",
+        "process: frame mapping and resource reclaim checks passed (not runnable)\r\n",
     ));
 }
