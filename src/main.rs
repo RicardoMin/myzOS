@@ -338,6 +338,7 @@ pub extern "C" fn kernel_main(
             cpu::MAX_HARTS,
         ));
 
+        #[cfg(not(feature = "user-vm-test"))]
         let _ = console::print(format_args!(
             "myzOS console ready. Type help and press Enter.\r\n",
         ));
@@ -351,39 +352,47 @@ pub extern "C" fn kernel_main(
         #[cfg(feature = "user-vm-test")]
         proc::check();
 
-        // SAFETY: 本 hart 的异常入口和已使能来源的处理逻辑已就绪，当前不持锁
-        unsafe { irq::enable() };
+        #[cfg(feature = "user-vm-test")]
+        unsafe {
+            proc::enter_first();
+        }
 
-        let mut editor = line::LineEditor::new();
+        #[cfg(not(feature = "user-vm-test"))]
+        {
+            // SAFETY: 本 hart 的异常入口和已使能来源的处理逻辑已就绪，当前不持锁
+            unsafe { irq::enable() };
 
-        loop {
-            for _ in 0..32 {
-                let Some(event) = input::next_event() else {
-                    break;
-                };
+            let mut editor = line::LineEditor::new();
 
-                match event {
-                    input::InputEvent::Byte(byte) => {
-                        if let Some(text) = editor.feed(byte) {
-                            shell::execute(text);
+            loop {
+                for _ in 0..32 {
+                    let Some(event) = input::next_event() else {
+                        break;
+                    };
+
+                    match event {
+                        input::InputEvent::Byte(byte) => {
+                            if let Some(text) = editor.feed(byte) {
+                                shell::execute(text);
+                            }
+                        }
+                        input::InputEvent::Lost(count) => {
+                            editor.on_input_lost(count);
                         }
                     }
-                    input::InputEvent::Lost(count) => {
-                        editor.on_input_lost(count);
+                }
+
+                irq::push_off();
+
+                if input::is_empty() {
+                    unsafe {
+                        core::arch::asm!("wfi", options(nostack));
                     }
                 }
+
+                // SAFETY: 同一 hart 上配对此处 push_off，期间保持关中断
+                unsafe { irq::pop_off() };
             }
-
-            irq::push_off();
-
-            if input::is_empty() {
-                unsafe {
-                    core::arch::asm!("wfi", options(nostack));
-                }
-            }
-
-            // SAFETY: 同一 hart 上配对此处 push_off，期间保持关中断
-            unsafe { irq::pop_off() };
         }
     }
 

@@ -37,6 +37,7 @@ SECTIONS
     __rodata_end = .;
 
     .data : ALIGN(16) {
+        PROVIDE(__global_pointer$ = . + 0x800);
         *(.data .data.* .sdata .sdata.*)
     }
 

@@ -4,6 +4,10 @@
 _entry:
     mv tp, a0
     la sp, boot_stack_top
+    .option push
+    .option norelax
+    la gp, __global_pointer$
+    .option pop
     call kernel_main
 
 .Lhang:
@@ -24,6 +28,10 @@ boot_stack_top:
 _secondary_entry:
     mv tp, a0
     la sp, secondary_stack_top
+    .option push
+    .option norelax
+    la gp, __global_pointer$
+    .option pop
     call secondary_main
 
 .Lsecondary_hang:

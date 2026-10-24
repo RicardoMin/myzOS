@@ -124,6 +124,14 @@ impl UserSpace {
         }
     }
 
+    pub(crate) fn satp(&self) -> usize {
+        (8usize << 60) | (self.root_pa >> 12)
+    }
+
+    pub(crate) fn frame_pa(&self) -> usize {
+        self.frame_pa
+    }
+
     /// # Safety
     /// 页表从未启用，页表及私有页由调用者独占且存活，映射未被外部修改
     /// 共享 trampoline 页持续有效且不可修改
