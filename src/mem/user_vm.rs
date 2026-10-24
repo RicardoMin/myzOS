@@ -48,7 +48,7 @@ impl UserSpace {
                 image_pa,
                 PTE_R | PTE_W | PTE_X | PTE_U,
             )
-            .expect("cannot map user iamge");
+            .expect("cannot map user image");
 
             pagetable::map_4k(
                 root_pa,
@@ -85,7 +85,7 @@ impl UserSpace {
     }
 
     /// # Safety
-    /// 页表从未被任何 hart 启用；独占所有页面，所有借用和访问已经结束
+    /// 页表从未被任何 hart 启用；页表及私有页由调用者独占，所有借用和访问已结束
     /// 映射未被外部修改, trampoline 是永久只读共享页，本对象不拥有它
     pub unsafe fn destroy(self) {
         let old = unsafe {
@@ -153,7 +153,7 @@ impl UserSpace {
                 ),
             ] {
                 let pte = pagetable::lookup_4k(self.root_pa, va)
-                    .expect("cannot map user image");
+                    .expect("user mapping missing");
 
                 assert_eq!(pte.pa(), pa);
                 assert_eq!(
