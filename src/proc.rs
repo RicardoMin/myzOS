@@ -6,8 +6,9 @@ use crate::{
     }, trampoline, trap, user_frame::UserFrame,
 };
 use core::{
-    arch::asm, mem::MaybeUninit, ptr, sync::atomic::{AtomicPtr, Ordering::{self, Relaxed}},
+    arch::asm, mem::MaybeUninit, ptr, sync::atomic::{AtomicPtr, Ordering},
 };
+use crate::syscall;
 
 
 static mut FIRST: MaybeUninit<Process> = MaybeUninit::uninit();
@@ -19,6 +20,15 @@ enum State {
     Created,
     Running,
 }
+
+
+const SIE: usize = 1 << 1;
+const SPIE: usize = 1 << 5;
+const SPP: usize= 1 << 8;
+const VS: usize = 1 << 9 | 1 << 10;
+const FS: usize = 1 << 13 | 1 << 14;
+const SUM: usize = 1 << 18;
+const MXR: usize = 1 << 19;
 
 
 struct Process {
@@ -74,40 +84,23 @@ pub unsafe fn enter_first() -> ! {
         slot.write(Process::new(image));
     }
 
-    let mut status: usize;
     let kernel_gp: usize;
 
     unsafe {
         asm!(
-            "csrr {status}, sstatus",
             "mv {kernel_gp}, gp",
-            status = out(reg) status,
             kernel_gp = out(reg) kernel_gp,
             options(nostack),
         );
     }
 
-    const SIE: usize = 1 << 1;
-    const SPIE: usize = 1 << 5;
-    const SPP: usize= 1 << 8;
-    const VS: usize = 1 << 9 | 1 << 10;
-    const FS: usize = 1 << 13 | 1 << 14;
-    const SUM: usize = 1 << 18;
-    const MXR: usize = 1 << 19;
-
-    status = !(SIE | SPP | VS | FS | SUM | MXR) & status | SPIE;
-
-    let user_satp;
-
     {
         let process = unsafe { &mut *slot };
-        user_satp = process.space.satp();
 
         let frame = unsafe {
             &mut *(process.space.frame_pa() as *mut UserFrame)
         };
 
-        frame.regs.sstatus = status;
         frame.kernel_satp = kernel_vm::read_satp();
         frame.kernel_sp = process.kstack_top;
         frame.kernel_entry = user_trap as *const () as usize;
@@ -119,25 +112,8 @@ pub unsafe fn enter_first() -> ! {
 
     CURRENT.store(slot, Ordering::Relaxed);
 
-    let trap_entry = trampoline::user_trap_entry();
-
-    let enter = unsafe {
-        core::mem::transmute::<
-            usize,
-            unsafe extern "C" fn(usize, usize) -> !,
-        >(trampoline::user_return_entry())
-    };
-
     unsafe {
-        asm!(
-            "csrw sie, zero",
-            "csrw stvec, {entry}",
-            "fence.i",
-            entry = in(reg) trap_entry,
-            options(nostack),
-        );
-
-        enter(USER_FRAME, user_satp)
+        return_to_user();
     }
 }
 
@@ -160,10 +136,10 @@ extern "C" fn user_trap() -> ! {
         );
     }
 
-    let current = CURRENT.load(Relaxed);
+    let current = CURRENT.load(Ordering::Relaxed);
     assert!(!current.is_null());
 
-    let (sepc, sstatus, user_sp, a0, a7) = {
+    let (sepc, sstatus, user_sp, a0, a1, a2, a7) = {
         let frame_ptr= unsafe {
             ((*current).space.frame_pa()) as *const UserFrame
         };
@@ -175,39 +151,132 @@ extern "C" fn user_trap() -> ! {
             frame.regs.sstatus,
             frame.regs.x[2],
             frame.regs.x[10],
+            frame.regs.x[11],
+            frame.regs.x[12],
             frame.regs.x[17],
         )
     };
 
-    if cause != 8 {
-        trap::rust_trap_fatal(
-            cause,
-            sepc,
-            value,
-            sstatus,
-            user_sp,
+    match cause {
+        8 => {
+            assert_eq!((sstatus & 1 << 8), 0);
+            assert!(kernel_sp >= KSTACK_BOTTOM && kernel_sp < KSTACK_TOP);
+            assert!(kernel_sp % 16 == 0);
+
+            let result = syscall::dispatch(a7);
+
+            {
+                let frame = unsafe {
+                    &mut *((*current).space.frame_pa() as *mut UserFrame)
+                };
+
+                frame.regs.sepc = sepc
+                    .checked_add(4)
+                    .expect("user return PC overflow");
+
+                frame.regs.x[10] = result as usize;
+            }
+
+            unsafe {
+                return_to_user();
+            }
+        }
+        3 => {
+            let first = a0 as isize;
+            let second = a1 as isize;
+            let unknown = a2 as isize;
+
+            let _ = console::print(format_args!(
+                "user: syscall returns: first={}, second={}, unknown={}\r\n",
+                first,
+                second,
+                unknown,
+            ));
+
+            assert_eq!(
+                (first, second, unknown),
+                (0, 0, -38),
+                "user syscall return values are incorrect",
+            );
+
+            let _ = console::print(format_args!(
+                "user: syscall round trip passed; halted in kernel\r\n",
+            ));
+
+            loop {
+                core::hint::spin_loop();
+            }
+        }
+        _ => {
+            trap::rust_trap_fatal(
+                cause,
+                sepc,
+                value,
+                sstatus,
+                user_sp,
+            );
+        }
+
+    }
+}
+
+/// # Safety
+/// 当前 hart 独占当前进程及现场，内核页表有效
+/// 当前关中断、IRQ 深度为零，无持锁和跨越交接的现场引用
+unsafe fn return_to_user() -> ! {
+    assert!(!irq::enabled());
+    assert_eq!(irq::depth(), 0);
+
+    let current = CURRENT.load(Ordering::Relaxed);
+    assert!(!current.is_null());
+
+    let (user_satp, frame_pa) = unsafe {
+        let process = &*current;
+
+        (
+            process.space.satp(),
+            process.space.frame_pa(),
+        )
+    };
+
+    let status: usize;
+
+    unsafe {
+        asm!(
+            "csrr {status}, sstatus",
+            status = out(reg) status,
+            options(nostack),
         );
     }
 
-    assert_eq!((sstatus & 1 << 8), 0);
-    assert_eq!(a0, 0x1234);
-    assert_eq!(a7, 0);
-    assert!(kernel_sp >= KSTACK_BOTTOM && kernel_sp < KSTACK_TOP);
-    assert!(kernel_sp % 16 == 0);
+    {
+        let frame = unsafe {
+            &mut *(frame_pa as *mut UserFrame)
+        };
 
-    let _ = console::print(format_args!(
-        concat!(
-            "user: cause={} sepc={:#x} a0={:#x} a7={:#x}\r\n",
-            "user: first entry check passed; halted in kernel\r\n",
-        ),
-        cause,
-        sepc,
-        a0,
-        a7,
-    ));
+        frame.regs.sstatus = 
+            (status & !(SIE | SPP | VS | FS | SUM | MXR)) | SPIE;
+    }
 
-    loop {
-        core::hint::spin_loop();
+    let trap_entry = trampoline::user_trap_entry();
+
+    let enter = unsafe {
+        core::mem::transmute::<
+            usize, 
+            unsafe extern "C" fn(usize, usize) -> !
+        >(trampoline::user_return_entry())
+    };
+
+    unsafe {
+        asm!(
+            "csrw sie, zero",
+            "csrw stvec, {entry}",
+            "fence.i",
+            entry = in(reg) trap_entry,
+            options(nostack),
+        );
+
+        enter(USER_FRAME, user_satp)
     }
 }
 

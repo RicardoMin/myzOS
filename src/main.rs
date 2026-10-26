@@ -28,7 +28,8 @@ mod context_test;
 mod user_frame;
 #[cfg(feature = "user-vm-test")]
 mod proc;
-
+#[cfg(feature = "user-vm-test")]
+mod syscall;
 
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
