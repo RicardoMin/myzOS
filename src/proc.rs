@@ -9,6 +9,7 @@ use core::{
     arch::asm, mem::MaybeUninit, ptr, sync::atomic::{AtomicPtr, Ordering},
 };
 use crate::syscall;
+use crate::shell;
 
 
 static mut FIRST: MaybeUninit<Process> = MaybeUninit::uninit();
@@ -105,7 +106,7 @@ unsafe fn return_to_user() -> ! {
             &mut *(frame_pa as *mut UserFrame)
         };
 
-        frame.regs.sstatus = 
+        frame.regs.sstatus =
             (status & !(SIE | SPP | VS | FS | SUM | MXR)) | SPIE;
     }
 
@@ -113,14 +114,13 @@ unsafe fn return_to_user() -> ! {
 
     let enter = unsafe {
         core::mem::transmute::<
-            usize, 
+            usize,
             unsafe extern "C" fn(usize, usize) -> !
         >(trampoline::user_return_entry())
     };
 
     unsafe {
         asm!(
-            "csrw sie, zero",
             "csrw stvec, {entry}",
             "fence.i",
             entry = in(reg) trap_entry,
@@ -276,62 +276,74 @@ extern "C" fn user_trap() -> ! {
     assert!(kernel_sp >= KSTACK_BOTTOM && kernel_sp < KSTACK_TOP);
     assert_eq!(kernel_sp % 16, 0);
 
-    match cause {
-        8 => {
-            let result = syscall::dispatch(a7);
+    if !trap::handle_interrupt(cause) {
+        match cause {
+            8 => {
+                let result = syscall::dispatch(a7);
 
-            {
-                let frame = unsafe {
-                    &mut *((*current).space.frame_pa() as *mut UserFrame)
-                };
+                {
+                    let frame = unsafe {
+                        &mut *((*current).space.frame_pa() as *mut UserFrame)
+                    };
 
-                frame.regs.sepc = sepc
-                    .checked_add(4)
-                    .expect("user return PC overflow");
+                    frame.regs.sepc = sepc
+                        .checked_add(4)
+                        .expect("user return PC overflow");
 
-                frame.regs.x[10] = result as usize;
+                    frame.regs.x[10] = result as usize;
+                }
             }
+            3 => {
+                let first = a0 as isize;
+                let second = a1 as isize;
+                let unknown = a2 as isize;
 
-            unsafe {
-                return_to_user();
+                let _ = console::print(format_args!(
+                    "user: syscall returns: first={}, second={}, unknown={}\r\n",
+                    first,
+                    second,
+                    unknown,
+                ));
+
+                assert_eq!(
+                    (first, second, unknown),
+                    (0, 0, -38),
+                    "user syscall return values are incorrect",
+                );
+
+                let _ = console::print(format_args!(
+                    concat!(
+                        "user: syscall round trip passed; returning to user mode\r\n",
+                        "myzOS console ready while user code runs. Type help and press Enter.\r\n",
+                    )
+                ));
+
+                {
+                    let frame = unsafe {
+                        &mut *((*current).space.frame_pa() as *mut UserFrame)
+                    };
+
+                    frame.regs.sepc = sepc
+                        .checked_add(4)
+                        .expect("user test marker PC overflow");
+                }
+            }
+            _ => {
+                trap::rust_trap_fatal(
+                    cause,
+                    sepc,
+                    value,
+                    sstatus,
+                    user_sp,
+                );
             }
         }
-        3 => {
-            let first = a0 as isize;
-            let second = a1 as isize;
-            let unknown = a2 as isize;
+    }
 
-            let _ = console::print(format_args!(
-                "user: syscall returns: first={}, second={}, unknown={}\r\n",
-                first,
-                second,
-                unknown,
-            ));
+    shell::poll_input();
 
-            assert_eq!(
-                (first, second, unknown),
-                (0, 0, -38),
-                "user syscall return values are incorrect",
-            );
-
-            let _ = console::print(format_args!(
-                "user: syscall round trip passed; halted in kernel\r\n",
-            ));
-
-            loop {
-                core::hint::spin_loop();
-            }
-        }
-        _ => {
-            trap::rust_trap_fatal(
-                cause,
-                sepc,
-                value,
-                sstatus,
-                user_sp,
-            );
-        }
-
+    unsafe {
+        return_to_user();
     }
 }
 

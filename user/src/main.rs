@@ -37,7 +37,10 @@ pub extern "C" fn _start() -> ! {
 
     unsafe {
         asm!(
+            ".option push",
+            ".option norvc",
             "ebreak",
+            ".option pop",
             in("a0") first,
             in("a1") second,
             in("a2") unknown,

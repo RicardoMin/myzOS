@@ -1,5 +1,33 @@
-use crate::{console, mem, timer};
+use crate::{
+    console, input, line::LineEditor, mem,
+    spinlock::SpinLock, timer,
+};
 
+
+static EDITOR: SpinLock<LineEditor> =
+    SpinLock::new(LineEditor::new());
+
+
+pub (crate) fn poll_input() {
+    let mut editor = EDITOR.lock();
+
+    for _ in 0..32 {
+        let Some(event) = input::next_event() else {
+            break;
+        };
+
+        match event {
+            input::InputEvent::Byte(byte) => {
+                if let Some(text) = editor.feed(byte) {
+                    execute(text);
+                }
+            }
+            input::InputEvent::Lost(count) => {
+                editor.on_input_lost(count);
+            }
+        }
+    }
+}
 
 pub fn execute(line: &str) {
     let text = line.trim();

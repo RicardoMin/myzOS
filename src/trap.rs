@@ -18,21 +18,8 @@ unsafe extern "C" {
 
 static TRAP_REPORTED: AtomicBool = AtomicBool::new(false);
 
-
-#[cfg(feature = "trap-test")]
-pub fn check_return() {
-    // SAFETY: 当前 hart 已安装异常入口，并使用有效内核栈；
-    // 指定测试断点会被处理函数识别，恢复现场后返回
-    let value = unsafe { _trap_test() };
-
-    assert_eq!(value, 0x1234);
-
-    let _ = crate::console::print(format_args!(
-        "trap-test: hart={} breakpoint returned, t0 restored\r\n",
-        cpu::hart_id(),
-    ));
-}
-
+const TIMER_INTERRUPT: usize = (1usize << 63) | 5;
+const EXTERNAL_INTERRUPT: usize = (1usize << 63) | 9;
 
 pub fn init_hart() {
     assert_eq!(irq::enabled(), false);
@@ -109,6 +96,19 @@ const _: () = {
 };
 
 
+pub(crate) fn handle_interrupt(scause: usize) -> bool {
+    assert!(!irq::enabled());
+
+    match scause {
+        TIMER_INTERRUPT => crate::timer::on_interrupt(),
+        EXTERNAL_INTERRUPT => handle_external_interrupt(),
+        _ => return false,
+    }
+
+    true
+}
+
+
 /// 接收汇编入口保存的 S 模式整数寄存器现场
 /// 
 /// 汇编入口保证 frame 指向当前内核栈中已完整初始化、独占访问的现场
@@ -137,17 +137,7 @@ pub extern "C" fn rust_trap(frame: &mut TrapFrame) {
         "trap: interrupts must remain disabled",
     );
 
-    let timer_interrupt = (1usize << 63) | 5;
-
-    if scause == timer_interrupt {
-        crate::timer::on_interrupt();
-        return;
-    }
-
-    let external_interrupt = (1usize << 63) | 9;
-
-    if scause == external_interrupt {
-        handle_external_interrupt();
+    if handle_interrupt(scause) {
         return;
     }
 
@@ -183,4 +173,19 @@ fn handle_external_interrupt() {
         drop(claim);
         panic!("plic: unexpected IRQ {}", irq);
     }
+}
+
+
+#[cfg(feature = "trap-test")]
+pub fn check_return() {
+    // SAFETY: 当前 hart 已安装异常入口，并使用有效内核栈；
+    // 指定测试断点会被处理函数识别，恢复现场后返回
+    let value = unsafe { _trap_test() };
+
+    assert_eq!(value, 0x1234);
+
+    let _ = crate::console::print(format_args!(
+        "trap-test: hart={} breakpoint returned, t0 restored\r\n",
+        cpu::hart_id(),
+    ));
 }

@@ -10,7 +10,7 @@ pub struct LineEditor {
 }
 
 impl LineEditor {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             buf: [0; LINE_CAPACITY],
             len: 0,

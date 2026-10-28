@@ -363,25 +363,8 @@ pub extern "C" fn kernel_main(
             // SAFETY: 本 hart 的异常入口和已使能来源的处理逻辑已就绪，当前不持锁
             unsafe { irq::enable() };
 
-            let mut editor = line::LineEditor::new();
-
             loop {
-                for _ in 0..32 {
-                    let Some(event) = input::next_event() else {
-                        break;
-                    };
-
-                    match event {
-                        input::InputEvent::Byte(byte) => {
-                            if let Some(text) = editor.feed(byte) {
-                                shell::execute(text);
-                            }
-                        }
-                        input::InputEvent::Lost(count) => {
-                            editor.on_input_lost(count);
-                        }
-                    }
-                }
+                shell::poll_input();
 
                 irq::push_off();
 
