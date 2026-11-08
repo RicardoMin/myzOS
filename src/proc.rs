@@ -1,3 +1,5 @@
+use myzos_uapi::E_BADARG;
+
 use crate::{
     console, context::{Context, arch_switch}, cpu, irq, mem::{
         PAGE_SIZE, kernel_vm, layout::{
@@ -254,20 +256,27 @@ extern "C" fn user_trap() -> ! {
     let current = CURRENT.load(Ordering::Relaxed);
     assert!(!current.is_null());
 
-    let (sepc, sstatus, user_sp, a0, a1, a2, a7) = {
+    let (sepc, sstatus, user_sp, args, a7) = {
         let frame_ptr= unsafe {
             ((*current).space.frame_pa()) as *const UserFrame
         };
 
         let frame = unsafe { &*frame_ptr };
 
+        let args = [
+            frame.regs.x[10],
+            frame.regs.x[11],
+            frame.regs.x[12],
+            frame.regs.x[13],
+            frame.regs.x[14],
+            frame.regs.x[15],
+        ];
+
         (
             frame.regs.sepc,
             frame.regs.sstatus,
             frame.regs.x[2],
-            frame.regs.x[10],
-            frame.regs.x[11],
-            frame.regs.x[12],
+            args,
             frame.regs.x[17],
         )
     };
@@ -279,7 +288,11 @@ extern "C" fn user_trap() -> ! {
     if !trap::handle_interrupt(cause) {
         match cause {
             8 => {
-                let result = syscall::dispatch(a7);
+                let result = unsafe {
+                    let process = &*current;
+
+                    syscall::dispatch(a7, args, &process.space)
+                };
 
                 {
                     let frame = unsafe {
@@ -294,9 +307,23 @@ extern "C" fn user_trap() -> ! {
                 }
             }
             3 => {
-                let first = a0 as isize;
-                let second = a1 as isize;
-                let unknown = a2 as isize;
+                let first = args[0] as isize;
+                let second = args[1] as isize;
+                let unknown = args[2] as isize;
+
+                assert_eq!(
+                    (
+                        args[3] as isize,
+                        args[4] as isize,
+                        args[5] as isize,
+                    ),
+                    (0, E_BADARG, E_BADARG),
+                    "user copyin results are incorrect",
+                );
+
+                let _ = console::print(format_args!(
+                    "user: copyin checks passed\r\n",
+                ));
 
                 let _ = console::print(format_args!(
                     "user: syscall returns: first={}, second={}, unknown={}\r\n",

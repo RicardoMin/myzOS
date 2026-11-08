@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
+name = "myzos-uapi"
+version = "0.1.0"
+
+[[package]]
 name = "myzos-user"
 version = "0.1.0"
+dependencies = [
+ "myzos-uapi",
+]

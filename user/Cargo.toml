@@ -3,6 +3,9 @@ name = "myzos-user"
 version = "0.1.0"
 edition = "2024"
 
+[dependencies]
+myzos-uapi = { path = "../uapi" }
+
 [[bin]]
 name = "init"
 path = "src/main.rs"

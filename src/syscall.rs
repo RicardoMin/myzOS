@@ -1,8 +1,23 @@
-use crate::console;
+use crate::{
+    console,
+    mem::user_vm::UserSpace,
+};
+use myzos_uapi::{
+    E_BADARG,
+    E_NOSYS,
+    SYS_HELLO,
+    SYS_TEST_COPYIN,
+};
 
-const SYS_HELLO: usize = 0;
 
-pub(crate) fn dispatch(number: usize) -> isize {
+/// # Safety
+/// space 的用户执行已暂停、当前内核映射有效
+/// 本次调用期间，用户页表和数据页保持稳定
+pub(crate) unsafe fn dispatch(
+    number: usize,
+    args: [usize; 6],
+    space: &UserSpace,
+) -> isize {
     match number {
         SYS_HELLO => {
             let _ = console::print(format_args!(
@@ -11,6 +26,40 @@ pub(crate) fn dispatch(number: usize) -> isize {
             
             0
         }
-        _ => -38
+        SYS_TEST_COPYIN => {
+            let count = args[1];
+            if count > 16 {
+               return E_BADARG;
+            }
+            let mut bytes = [0u8; 64];
+            if unsafe {
+                space.copy_from_user(
+                    &mut bytes[..count * 4],
+                    args[0],
+                )
+            }.is_err() {
+                return E_BADARG;
+            }
+            
+            let mut values = [0i32; 16];
+            for i in 0..count {
+                let base = i * 4;
+
+                values[i] = i32::from_le_bytes([
+                    bytes[base],
+                    bytes[base + 1],
+                    bytes[base + 2],
+                    bytes[base + 3],
+                ]);
+            }
+
+            let _ = console::print(format_args!(
+                "copyin: {:?}\r\n",
+                &values[..count],
+            ));
+            
+            0
+        }
+        _ =>  E_NOSYS
     }
 }

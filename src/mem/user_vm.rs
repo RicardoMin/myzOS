@@ -11,8 +11,16 @@ use super::layout::{
     USER_FRAME,
     TRAMPOLINE,
     KSTACK_BOTTOM,
+    SV39_LOW_END,
 };
 use crate::trampoline;
+
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum UserCopyError {
+    InvalidRange,
+    NotReadable,
+}
 
 pub struct UserSpace {
     root_pa: usize,
@@ -133,6 +141,60 @@ impl UserSpace {
     }
 
     /// # Safety
+    /// 当前使用可访问物理页的内核恒等映射；用户执行已暂停
+    /// 页表和源页持续有效，无并发修改；dst 不与源物理区域重叠
+    pub(crate) unsafe fn copy_from_user(
+        &self,
+        dst: &mut [u8],
+        src: usize,
+    ) -> Result<(), UserCopyError> {
+        if dst.is_empty() {
+            return Ok(());
+        }
+        let end = src
+            .checked_add(dst.len())
+            .ok_or(UserCopyError::InvalidRange)?;
+
+        if end > SV39_LOW_END {
+            return Err(UserCopyError::InvalidRange);
+        }
+
+        let mut copied = 0;
+
+        while copied < dst.len() {
+            let va = src + copied;
+            let offset = super::vm::page_offset(va);
+
+            let pte = unsafe {
+                pagetable::lookup_4k(self.root_pa, va)
+            }
+            .ok_or(UserCopyError::NotReadable)?;
+
+            let required = PTE_R | PTE_U;
+            if pte.flags() & required != required {
+                return Err(UserCopyError::NotReadable);
+            }
+
+            let n = core::cmp::min(
+                PAGE_SIZE - offset,
+                dst.len() - copied,
+            );
+
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    (pte.pa() + offset) as *const u8,
+                    dst.as_mut_ptr().add(copied),
+                    n,
+                );
+            }
+
+            copied += n;
+        }
+
+        Ok(())
+    }
+
+    /// # Safety
     /// 页表从未启用，页表及私有页由调用者独占且存活，映射未被外部修改
     /// 共享 trampoline 页持续有效且不可修改
     pub(crate) unsafe fn check_layout(&self, image: &[u8]) {
@@ -197,6 +259,31 @@ impl UserSpace {
             ] {
                 assert!(pagetable::lookup_4k(self.root_pa, va).is_none());
             }
+
+            pagetable::map_4k(self.root_pa, 0x2000, self.image_pa, PTE_R | PTE_U)
+                .expect("map cross-page test alias failed");
+
+            let mut actual = [0u8; 4];
+
+            self.copy_from_user(&mut actual, 0x1ffe)
+                .expect("cross-page user copy failed");
+            
+            let expected = [
+                image.get(PAGE_SIZE -2).copied().unwrap_or(0),
+                image.get(PAGE_SIZE - 1).copied().unwrap_or(0),
+                image.first().copied().unwrap_or(0),
+                image.get(1).copied().unwrap_or(0),
+            ];
+
+            assert_eq!(
+                actual,
+                expected,
+                "cross-page user copy returned incorrect bytes",
+            );
+
+            let pte = pagetable::unmap_4k(self.root_pa, 0x2000)
+                .expect("unmap 0x2000 failed");
+            assert_eq!(pte.pa(), self.image_pa);
         }
     }
 }

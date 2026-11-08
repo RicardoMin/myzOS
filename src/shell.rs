@@ -29,7 +29,7 @@ pub (crate) fn poll_input() {
     }
 }
 
-pub fn execute(line: &str) {
+fn execute(line: &str) {
     let text = line.trim();
 
     if text.is_empty() {

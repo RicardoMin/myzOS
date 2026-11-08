@@ -60,7 +60,7 @@ pub unsafe fn write_pte(
 /// 已初始化、可通过同值地址直接读取的页表页；
 /// 条目由当前 Pte 构造器或 empty 生成；
 /// 整个查找期间没有冲突引用、并发修改或回收；
-/// 这棵临时页表尚未交给硬件使用
+/// 允许查询曾经启用、但当前已停止访问的稳定页表
 pub unsafe fn lookup_4k(
     root_pa: usize,
     va: usize,
@@ -98,7 +98,7 @@ pub unsafe fn lookup_4k(
 /// root_pa 及查找经过的非叶子项必须指向存活、已初始化、
 /// 可通过同值地址直接读取的页表页，条目由当前 Pte 构造器生成。
 /// 查找期间不得存在冲突引用、并发修改或回收；
-/// 这棵页表尚未交给硬件使用。
+/// 允许查询曾经启用、但当前已停止访问的稳定页表
 pub unsafe fn translate_4k(root_pa: usize, va: usize) -> Option<usize> {
     let pte = unsafe { lookup_4k(root_pa, va) }?;
     Some(pte.pa() + vm::page_offset(va))
