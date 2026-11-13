@@ -7,6 +7,7 @@ use myzos_uapi::{
     E_NOSYS,
     SYS_HELLO,
     SYS_TEST_COPYIN,
+    SYS_TEST_COPYOUT,
 };
 
 
@@ -58,6 +59,26 @@ pub(crate) unsafe fn dispatch(
                 &values[..count],
             ));
             
+            0
+        }
+        SYS_TEST_COPYOUT => {
+            let values = [1i32, 2, 3, 4, 5];
+            let mut bytes = [0u8; 20];
+
+            for (i, value) in values.iter().enumerate() {
+                let start = i * 4;
+                bytes[start..start + 4].copy_from_slice(&value.to_le_bytes());
+            }
+
+            unsafe {
+                if space.copy_to_user(
+                    args[0], 
+                    &bytes
+                ).is_err() {
+                    return E_BADARG;
+                }
+            }
+
             0
         }
         _ =>  E_NOSYS

@@ -5,7 +5,7 @@ mod syscall;
 
 use core::panic::PanicInfo;
 use core::arch::asm;
-use myzos_uapi::{SYS_HELLO, SYS_TEST_COPYIN};
+use myzos_uapi::{SYS_HELLO, SYS_TEST_COPYIN, SYS_TEST_COPYOUT};
 use syscall::syscall6;
 
 
@@ -46,6 +46,25 @@ pub extern "C" fn _start() -> ! {
         )
     };
 
+    let mut output = [0i32; 5];
+
+    let written = unsafe {
+        syscall6(
+            SYS_TEST_COPYOUT,
+            [output.as_mut_ptr() as usize, 0, 0, 0, 0, 0],
+        )
+    };
+
+    let read_back = unsafe {
+        syscall6(
+            SYS_TEST_COPYIN,
+            [output.as_ptr() as usize, output.len(), 0, 0, 0, 0],
+        )
+    };
+
+    let copyout_ok =
+        written == 0 && output == [1, 2, 3, 4, 5] && read_back == 0;
+
     unsafe {
         asm!(
             ".option push",
@@ -58,6 +77,7 @@ pub extern "C" fn _start() -> ! {
             in("a3") valid,
             in("a4") denied,
             in("a5") cross,
+            in("a6") copyout_ok as usize,
             options(nostack),
         );
     }

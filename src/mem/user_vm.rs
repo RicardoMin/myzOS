@@ -20,6 +20,7 @@ use crate::trampoline;
 pub(crate) enum UserCopyError {
     InvalidRange,
     NotReadable,
+    NotWritable,
 }
 
 pub struct UserSpace {
@@ -195,6 +196,60 @@ impl UserSpace {
     }
 
     /// # Safety
+    /// 用户执行已暂停，页表和相关物理页存活且稳定，内核恒等映射可写
+    /// 目标物理区域无并发访问或冲突引用，且不与 src 重叠
+    pub(crate) unsafe fn copy_to_user(
+        &self,
+        dst: usize,
+        src: &[u8],
+    ) -> Result<(), UserCopyError> {
+        if src.is_empty() {
+            return Ok(());
+        }
+
+        let end = dst
+            .checked_add(src.len())
+            .ok_or(UserCopyError::InvalidRange)?;
+
+        if end > SV39_LOW_END {
+            return Err(UserCopyError::InvalidRange);
+        }
+
+        let mut copied = 0;
+        while copied < src.len() {
+            let va = dst + copied;
+            let offset = super::vm::page_offset(va);
+
+            let pte = unsafe {
+                pagetable::lookup_4k(self.root_pa, va)
+            }
+            .ok_or(UserCopyError::NotWritable)?;
+            
+            let required = PTE_U | PTE_W;
+            if (pte.flags() & required) != required {
+                return Err(UserCopyError::NotWritable);
+            }
+
+            let n = core::cmp::min(
+            PAGE_SIZE - offset,
+            src.len() - copied,
+            );
+
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    src.as_ptr().add(copied),
+                    (pte.pa() + offset) as *mut u8,
+                    n,
+                );
+            }
+
+            copied += n;
+        }
+
+        Ok(())
+    }
+
+    /// # Safety
     /// 页表从未启用，页表及私有页由调用者独占且存活，映射未被外部修改
     /// 共享 trampoline 页持续有效且不可修改
     pub(crate) unsafe fn check_layout(&self, image: &[u8]) {
@@ -281,9 +336,50 @@ impl UserSpace {
                 "cross-page user copy returned incorrect bytes",
             );
 
+            let before = ptr::read(self.image_pa as *const u8);
+
+            assert_eq!(
+                self.copy_to_user(0x2000, &[before ^ 0xff]),
+                Err(UserCopyError::NotWritable),
+            );
+
+            assert_eq!(
+                ptr::read(self.image_pa as *const u8),
+                before,
+            );
+
             let pte = pagetable::unmap_4k(self.root_pa, 0x2000)
                 .expect("unmap 0x2000 failed");
             assert_eq!(pte.pa(), self.image_pa);
+
+            pagetable::map_4k(self.root_pa, 0x2000, self.stack_pa, PTE_R | PTE_W | PTE_U)
+                .expect("map writable test alias failed");
+
+            self.copy_to_user(0x1ffe, &[0x11, 0x22, 0x33, 0x44])
+                .expect("cross-page user write failed");
+
+            let actual = [
+                ptr::read((self.image_pa + PAGE_SIZE - 2) as *const u8),
+                ptr::read((self.image_pa + PAGE_SIZE - 1) as *const u8),
+                ptr::read(self.stack_pa as *const u8),
+                ptr::read((self.stack_pa + 1) as *const u8),
+            ];
+
+            assert_eq!(
+                actual,
+                [0x11, 0x22, 0x33, 0x44],
+                "cross-page user write reached incorrect physical locations",
+            );
+
+            let pte = pagetable::unmap_4k(self.root_pa, 0x2000)
+                .expect("unmap writable test alias failed");
+
+            assert_eq!(
+                pte.pa(),
+                self.stack_pa,
+                "writable test alias pointed to an unexpected physical page",
+            );
+
         }
     }
 }

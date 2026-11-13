@@ -2,6 +2,7 @@
 
 pub const SYS_HELLO: usize = 0;
 pub const SYS_TEST_COPYIN: usize = 1;
+pub const SYS_TEST_COPYOUT: usize = 2;
 
 pub const E_BADARG: isize = -1;
 pub const E_NOSYS: isize = -38;

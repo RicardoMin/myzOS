@@ -345,6 +345,17 @@ extern "C" fn user_trap() -> ! {
                     )
                 ));
 
+                let copyout_ok = unsafe {
+                    let frame = &*((*current).space.frame_pa() as *const UserFrame);
+                    frame.regs.x[16]
+                };
+
+                assert_eq!(copyout_ok, 1, "user copyout check failed");
+
+                let _ = console::print(format_args!(
+                    "user: copyout check passed\r\n",
+                ));
+
                 {
                     let frame = unsafe {
                         &mut *((*current).space.frame_pa() as *mut UserFrame)
