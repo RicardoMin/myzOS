@@ -21,6 +21,7 @@ pub(crate) enum UserCopyError {
     InvalidRange,
     NotReadable,
     NotWritable,
+    Unterminated,
 }
 
 pub struct UserSpace {
@@ -249,6 +250,61 @@ impl UserSpace {
         Ok(())
     }
 
+    /// 复制包含 NUL 的用户字符串，返回不含 NUL 的字节长度
+    /// 
+    /// # Safety
+    /// 用户执行已停止；页表和源页存活且无并发修改，内核恒等映射可读
+    /// dst 不与源物理区重叠，且不存在冲突引用
+    pub(crate) unsafe fn copy_str_from_user(
+        &self,
+        dst: &mut [u8],
+        src: usize,
+    ) -> Result<usize, UserCopyError> {
+        let mut copied = 0;
+
+        while copied < dst.len() {
+            let va = src
+                .checked_add(copied)
+                .ok_or(UserCopyError::InvalidRange)?;
+
+            if va >= SV39_LOW_END {
+                return Err(UserCopyError::InvalidRange);
+            }
+
+            let pte = unsafe {
+                pagetable::lookup_4k(self.root_pa, va)
+                    .ok_or(UserCopyError::NotReadable)?
+            };
+
+            let required = PTE_U | PTE_R;
+            
+            if (pte.flags() & required) != required {
+                return Err(UserCopyError::NotReadable);
+            }
+
+            let offset = super::vm::page_offset(va);
+            let n = core::cmp::min(
+                PAGE_SIZE - offset,
+                dst.len() - copied
+            );
+
+            for i in 0..n {
+                let byte = unsafe {
+                    ptr::read((pte.pa() + offset + i) as *const u8)
+                };
+
+                dst[copied + i] = byte;
+
+                if byte == 0 {
+                    return Ok(copied + i);
+                }
+            }
+
+            copied += n;
+        }
+        Err(UserCopyError::Unterminated)
+    }
+
     /// # Safety
     /// 页表从未启用，页表及私有页由调用者独占且存活，映射未被外部修改
     /// 共享 trampoline 页持续有效且不可修改
@@ -371,6 +427,14 @@ impl UserSpace {
                 "cross-page user write reached incorrect physical locations",
             );
 
+            self.copy_to_user(0x1ffe, b"OS\0X")
+                .expect("write user string failed");
+
+            let mut crossing = [0xccu8; 3];
+            let ret1= self.copy_str_from_user(&mut crossing, 0x1ffe);
+            assert_eq!(ret1, Ok(2));
+            assert_eq!(&crossing, b"OS\0");
+
             let pte = pagetable::unmap_4k(self.root_pa, 0x2000)
                 .expect("unmap writable test alias failed");
 
@@ -380,6 +444,13 @@ impl UserSpace {
                 "writable test alias pointed to an unexpected physical page",
             );
 
+            self.copy_to_user(0x1ffe, b"Z\0")
+                .expect("write user string failed");
+
+            let mut ending = [0xccu8; 8];
+            let ret2 = self.copy_str_from_user(&mut ending, 0x1ffe);
+            assert_eq!(ret2, Ok(1));
+            assert_eq!(&ending[..2], b"Z\0");
         }
     }
 }

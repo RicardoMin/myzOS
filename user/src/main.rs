@@ -5,7 +5,13 @@ mod syscall;
 
 use core::panic::PanicInfo;
 use core::arch::asm;
-use myzos_uapi::{SYS_HELLO, SYS_TEST_COPYIN, SYS_TEST_COPYOUT};
+use myzos_uapi::{
+    SYS_HELLO,
+    SYS_TEST_COPYIN,
+    SYS_TEST_COPYOUT,
+    SYS_TEST_COPYINSTR,
+    E_BADARG,
+};
 use syscall::syscall6;
 
 
@@ -65,6 +71,34 @@ pub extern "C" fn _start() -> ! {
     let copyout_ok =
         written == 0 && output == [1, 2, 3, 4, 5] && read_back == 0;
 
+    let message = b"hello from user\0ignored";
+    let unterminated = [b'x'; 64];
+
+    let string_valid = unsafe {
+        syscall6(
+            SYS_TEST_COPYINSTR,
+            [message.as_ptr() as usize, 0, 0, 0, 0, 0],
+        )
+    };
+
+    let string_unterminated = unsafe {
+        syscall6(
+            SYS_TEST_COPYINSTR,
+            [unterminated.as_ptr() as usize, 0, 0, 0, 0, 0],
+        )
+    };
+
+    let string_denied = unsafe {
+        syscall6(
+            SYS_TEST_COPYINSTR,
+            [(1usize << 38) - 2 * 4096, 0, 0, 0, 0, 0],
+        )
+    };
+
+    let copyinstr_ok = string_valid == 0
+        && string_unterminated == E_BADARG
+        && string_denied == E_BADARG;
+
     unsafe {
         asm!(
             ".option push",
@@ -78,6 +112,7 @@ pub extern "C" fn _start() -> ! {
             in("a4") denied,
             in("a5") cross,
             in("a6") copyout_ok as usize,
+            in("a7") copyinstr_ok as usize,
             options(nostack),
         );
     }

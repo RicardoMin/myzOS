@@ -8,12 +8,13 @@ use myzos_uapi::{
     SYS_HELLO,
     SYS_TEST_COPYIN,
     SYS_TEST_COPYOUT,
+    SYS_TEST_COPYINSTR,
 };
 
 
 /// # Safety
-/// space 的用户执行已暂停、当前内核映射有效
-/// 本次调用期间，用户页表和数据页保持稳定
+/// 用户执行已暂停；页表及相关物理页保持存活，映射不被并发修改
+/// 当前内核映射允许所需读写；复制涉及的物理区域不存在冲突访问或引用
 pub(crate) unsafe fn dispatch(
     number: usize,
     args: [usize; 6],
@@ -78,6 +79,28 @@ pub(crate) unsafe fn dispatch(
                     return E_BADARG;
                 }
             }
+
+            0
+        }
+        SYS_TEST_COPYINSTR => {
+            let mut bytes = [0u8; 64];
+
+            let len = match unsafe {
+                space.copy_str_from_user(&mut bytes, args[0])
+            } {
+                Ok(len) => len,
+                Err(_) => return E_BADARG,
+            };
+
+            let text = match core::str::from_utf8(&bytes[..len]) {
+                Ok(text) => text,
+                Err(_) => return E_BADARG,
+            };
+
+            let _ = console::print(format_args!(
+                "copyinstr: {}\r\n",
+                text,
+            ));
 
             0
         }

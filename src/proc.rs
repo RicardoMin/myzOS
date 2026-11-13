@@ -338,19 +338,25 @@ extern "C" fn user_trap() -> ! {
                     "user syscall return values are incorrect",
                 );
 
-                let _ = console::print(format_args!(
-                    concat!(
-                        "user: syscall round trip passed; returning to user mode\r\n",
-                        "myzOS console ready while user code runs. Type help and press Enter.\r\n",
-                    )
-                ));
-
                 let copyout_ok = unsafe {
                     let frame = &*((*current).space.frame_pa() as *const UserFrame);
                     frame.regs.x[16]
                 };
 
                 assert_eq!(copyout_ok, 1, "user copyout check failed");
+
+                assert_eq!(a7, 1, "user copyinstr checks failed");
+
+                let _ = console::print(format_args!(
+                    "user: copyinstr checks passed\r\n",
+                ));
+
+                let _ = console::print(format_args!(
+                    concat!(
+                        "user: syscall round trip passed; returning to user mode\r\n",
+                        "myzOS console ready while user code runs. Type help and press Enter.\r\n",
+                    )
+                ));
 
                 let _ = console::print(format_args!(
                     "user: copyout check passed\r\n",
