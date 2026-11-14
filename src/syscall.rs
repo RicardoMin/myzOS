@@ -1,6 +1,6 @@
 use crate::{
     console,
-    mem::user_vm::UserSpace,
+    proc::Process,
 };
 use myzos_uapi::{
     E_BADARG,
@@ -9,16 +9,18 @@ use myzos_uapi::{
     SYS_TEST_COPYIN,
     SYS_TEST_COPYOUT,
     SYS_TEST_COPYINSTR,
+    SYS_BRK,
 };
 
 
 /// # Safety
 /// 用户执行已暂停；页表及相关物理页保持存活，映射不被并发修改
 /// 当前内核映射允许所需读写；复制涉及的物理区域不存在冲突访问或引用
+/// 当前独占进程，满足页面修改和收缩区域的访问约束
 pub(crate) unsafe fn dispatch(
     number: usize,
     args: [usize; 6],
-    space: &UserSpace,
+    process: &mut Process,
 ) -> isize {
     match number {
         SYS_HELLO => {
@@ -35,7 +37,7 @@ pub(crate) unsafe fn dispatch(
             }
             let mut bytes = [0u8; 64];
             if unsafe {
-                space.copy_from_user(
+                process.space().copy_from_user(
                     &mut bytes[..count * 4],
                     args[0],
                 )
@@ -72,7 +74,7 @@ pub(crate) unsafe fn dispatch(
             }
 
             unsafe {
-                if space.copy_to_user(
+                if process.space().copy_to_user(
                     args[0], 
                     &bytes
                 ).is_err() {
@@ -86,7 +88,7 @@ pub(crate) unsafe fn dispatch(
             let mut bytes = [0u8; 64];
 
             let len = match unsafe {
-                space.copy_str_from_user(&mut bytes, args[0])
+                process.space().copy_str_from_user(&mut bytes, args[0])
             } {
                 Ok(len) => len,
                 Err(_) => return E_BADARG,
@@ -104,6 +106,7 @@ pub(crate) unsafe fn dispatch(
 
             0
         }
+        SYS_BRK => unsafe { process.brk(args[0]) }
         _ =>  E_NOSYS
     }
 }

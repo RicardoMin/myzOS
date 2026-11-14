@@ -3,7 +3,8 @@ use myzos_uapi::E_BADARG;
 use crate::{
     console, context::{Context, arch_switch}, cpu, irq, mem::{
         PAGE_SIZE, kernel_vm, layout::{
-            KSTACK_BOTTOM, KSTACK_TOP, USER_ENTRY, USER_FRAME,
+            KSTACK_BOTTOM, KSTACK_TOP,  USER_FRAME,
+            HEAP_START, MMAP_BEGIN,
         }, pmem, user_vm::UserSpace,
     }, trampoline, trap, user_frame::UserFrame,
 };
@@ -36,7 +37,7 @@ const SUM: usize = 1 << 18;
 const MXR: usize = 1 << 19;
 
 
-struct Process {
+pub(crate) struct Process {
     pid: usize,
     state: State,
     space: UserSpace,
@@ -53,7 +54,7 @@ impl Process {
             pid: 0,
             state: State::Created,
             space: UserSpace::new(image),
-            heap_top: USER_ENTRY + PAGE_SIZE,
+            heap_top: HEAP_START,
             user_stack_pages: 1,
             kstack_top: KSTACK_TOP,
             context: Context {
@@ -66,10 +67,40 @@ impl Process {
 
     /// # Safety
     /// 进程从未发布或运行，且满足 UserSpace::destroy 的全部约束
-    unsafe fn destroy(self) {
+    unsafe fn destroy(mut self) {
         unsafe { 
+            self.space.resize_heap(self.heap_top, HEAP_START);
             self.space.destroy();
         }
+    }
+
+    pub(crate) fn space(&self) -> &UserSpace {
+        &self.space
+    }
+
+    /// # Safety
+    /// 当前独占进程; 用户页表已暂停并完成所需同步
+    /// 收缩区域无存活引用或访问，恢复用户执行前须同步页表修改
+    pub(crate) unsafe fn brk(&mut self, new_top: usize) -> isize {
+        if new_top == 0 {
+            return self.heap_top as isize;
+        }
+
+        if new_top % PAGE_SIZE != 0 {
+            return E_BADARG;
+        }
+
+        if new_top < HEAP_START || new_top > MMAP_BEGIN {
+            return E_BADARG;
+        }
+
+        unsafe {
+            self.space.resize_heap(self.heap_top, new_top);
+        }
+
+        self.heap_top = new_top;
+
+        new_top as isize
     }
 }
 
@@ -289,9 +320,8 @@ extern "C" fn user_trap() -> ! {
         match cause {
             8 => {
                 let result = unsafe {
-                    let process = &*current;
-
-                    syscall::dispatch(a7, args, &process.space)
+                    let process = &mut *current;
+                    syscall::dispatch(a7, args, process)
                 };
 
                 {
@@ -345,10 +375,10 @@ extern "C" fn user_trap() -> ! {
 
                 assert_eq!(copyout_ok, 1, "user copyout check failed");
 
-                assert_eq!(a7, 1, "user copyinstr checks failed");
+                assert_eq!(a7, 1, "user copyinstr or brk checks failed");
 
                 let _ = console::print(format_args!(
-                    "user: copyinstr checks passed\r\n",
+                    "user: copyinstr and brk checks passed\r\n",
                 ));
 
                 let _ = console::print(format_args!(
@@ -400,7 +430,7 @@ pub fn check() {
     let image = include_bytes!(env!("MYZOS_USER_IMAGE"));
 
     let before = pmem::free_counts();
-    let process = Process::new(image);
+    let mut process = Process::new(image);
 
     unsafe {process.space.check_layout(image)};
 
@@ -419,12 +449,17 @@ pub fn check() {
         process.context.sp,
     ));
 
+    let ret = unsafe {
+        process.brk(HEAP_START + PAGE_SIZE)
+    };
+    assert_eq!(ret as usize, HEAP_START + PAGE_SIZE);
+
     unsafe {
         process.destroy();
     }
     assert_eq!(pmem::free_counts(), before);
 
     let _ = console::print(format_args!(
-        "process: frame mapping and resource reclaim checks passed (not runnable)\r\n",
+        "process: user mappings and resource reclaim checks passed (not runnable)",
     ));
 }

@@ -97,6 +97,7 @@ impl UserSpace {
     /// # Safety
     /// 页表从未被任何 hart 启用；页表及私有页由调用者独占，所有借用和访问已结束
     /// 映射未被外部修改, trampoline 是永久只读共享页，本对象不拥有它
+    /// 动态映射已经清空，仅保留构造时建立的固定映射
     pub unsafe fn destroy(self) {
         let old = unsafe {
             pagetable::unmap_4k(self.root_pa, USER_ENTRY)
@@ -251,7 +252,7 @@ impl UserSpace {
     }
 
     /// 复制包含 NUL 的用户字符串，返回不含 NUL 的字节长度
-    /// 
+    ///
     /// # Safety
     /// 用户执行已停止；页表和源页存活且无并发修改，内核恒等映射可读
     /// dst 不与源物理区重叠，且不存在冲突引用
@@ -277,7 +278,7 @@ impl UserSpace {
             };
 
             let required = PTE_U | PTE_R;
-            
+
             if (pte.flags() & required) != required {
                 return Err(UserCopyError::NotReadable);
             }
@@ -303,6 +304,32 @@ impl UserSpace {
             copied += n;
         }
         Err(UserCopyError::Unterminated)
+    }
+
+    pub(crate) unsafe fn resize_heap(
+        &mut self,
+        old_top: usize,
+        new_top: usize,
+    ) {
+        if new_top > old_top {
+            for va in (old_top..new_top).step_by(PAGE_SIZE) {
+                let pa = super::pmem::alloc_data();
+                unsafe {
+                    super::pagetable::map_4k(self.root_pa, va, pa, PTE_R | PTE_W | PTE_U)
+                        .expect("data map failed");
+                }
+            }
+        } else {
+            for va in (new_top..old_top).step_by(PAGE_SIZE) {
+                let pte = unsafe {
+                    super::pagetable::unmap_4k(self.root_pa, va)
+                        .expect("data unmap failed")
+                };
+                unsafe {
+                    super::pmem::free_data(pte.pa());
+                }
+            }
+        }
     }
 
     /// # Safety

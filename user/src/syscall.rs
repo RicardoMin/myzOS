@@ -22,3 +22,15 @@ pub unsafe fn syscall6(number: usize, args: [usize; 6]) -> isize {
 
     result as isize
 }
+
+
+/// # Safety
+/// 收缩区域内不存在仍需使用的对象或引用；成功后不得访问已释放区域
+pub unsafe fn brk(new_top: usize) -> isize {
+    unsafe {
+        syscall6(
+            myzos_uapi::SYS_BRK,
+            [new_top, 0, 0, 0, 0, 0],
+        )
+    }
+}
