@@ -8,7 +8,8 @@ pub mod layout;
 pub mod selftest;
 #[cfg(feature = "user-vm-test")]
 pub mod user_vm;
-
+#[cfg(feature = "user-vm-test")]
+pub mod mmap;
 
 pub const PAGE_SIZE: usize = 4096;
 

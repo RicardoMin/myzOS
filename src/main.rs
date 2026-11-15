@@ -276,6 +276,9 @@ pub extern "C" fn kernel_main(
         #[cfg(feature = "lab2-tests")]
         mem::selftest::run_primary();
 
+        #[cfg(feature = "user-vm-test")]
+        mem::mmap::selftest::run(true);
+
         let before = mem::pmem::free_counts();
         let root_pa = mem::kernel_vm::build();
         let after = mem::pmem::free_counts();
@@ -407,6 +410,9 @@ pub extern "C" fn secondary_main(
 
     #[cfg(feature = "lab2-tests")]
     mem::selftest::run_secondary();
+
+    #[cfg(feature = "user-vm-test")]
+    mem::mmap::selftest::run(false);
 
     let root_pa = loop {
         let root = KERNEL_ROOT_PA.load(Ordering::Acquire);

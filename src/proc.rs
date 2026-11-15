@@ -5,7 +5,7 @@ use crate::{
         PAGE_SIZE, kernel_vm, layout::{
             HEAP_START, KSTACK_BOTTOM, KSTACK_TOP, MMAP_BEGIN, USER_FRAME, USER_STACK_BOTTOM, USER_STACK_LIMIT, USER_STACK_TOP,
         }, pmem, user_vm::UserSpace,
-    }, proc, trampoline, trap, user_frame::UserFrame,
+    }, trampoline, trap, user_frame::UserFrame,
 };
 use core::{
     arch::asm,
@@ -86,8 +86,8 @@ impl Process {
     }
 
     /// # Safety
-    /// 当前独占进程; 用户页表已暂停并完成所需同步
-    /// 收缩区域无存活引用或访问，恢复用户执行前须同步页表修改
+    /// 当前独占进程; 用户页表从未启用，或已切离并完成同步
+    /// 栈页数准确，待增长区间未映射；恢复执行前须同步新增映射
     pub(crate) unsafe fn brk(&mut self, new_top: usize) -> isize {
         if new_top == 0 {
             return self.heap_top as isize;
@@ -410,7 +410,7 @@ extern "C" fn user_trap() -> ! {
 
                 assert_eq!(copyout_ok, 1, "user copyout check failed");
 
-                assert_eq!(a7, 1, "user copyinstr or brk checks failed");
+                assert_eq!(a7, 1, "user copyinstr, brk or stack checks failed");
 
                 let _ = console::print(format_args!(
                     "user: copyinstr, brk and stack checks passed\r\n",
