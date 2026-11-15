@@ -306,28 +306,55 @@ impl UserSpace {
         Err(UserCopyError::Unterminated)
     }
 
+    /// # Safety
+    /// 新旧堆顶合法，old_top 准确描述连续、独占的堆页
+    /// 增长和收缩区间分别满足对应页面区域操作的安全条件
     pub(crate) unsafe fn resize_heap(
         &mut self,
         old_top: usize,
         new_top: usize,
     ) {
         if new_top > old_top {
-            for va in (old_top..new_top).step_by(PAGE_SIZE) {
-                let pa = super::pmem::alloc_data();
-                unsafe {
-                    super::pagetable::map_4k(self.root_pa, va, pa, PTE_R | PTE_W | PTE_U)
-                        .expect("data map failed");
-                }
+            unsafe {
+                self.map_user_range(old_top, new_top);
             }
         } else {
-            for va in (new_top..old_top).step_by(PAGE_SIZE) {
-                let pte = unsafe {
-                    super::pagetable::unmap_4k(self.root_pa, va)
-                        .expect("data unmap failed")
-                };
-                unsafe {
-                    super::pmem::free_data(pte.pa());
-                }
+            unsafe {
+                self.unmap_user_range(new_top, old_top);
+            }
+        }
+    }
+
+    /// # Safety
+    /// 区间页面对齐且属于合法用户区域，目标区间尚未映射
+    /// 页表独占且存活，未启用或已切离并完成同步；恢复使用前须同步新映射
+    pub(crate) unsafe fn map_user_range(
+        &mut self,
+        begin: usize,
+        end: usize,
+    ) {
+        for va in (begin..end).step_by(PAGE_SIZE) {
+            let pa = pmem::alloc_data();
+            unsafe {
+                pagetable::map_4k(self.root_pa, va, pa, PTE_U | PTE_R | PTE_W)
+                    .expect("data map failed")
+            };
+        }
+    }
+
+    /// # Safety
+    /// 区间页对齐，连续映射本地址空间独占的数据池页，无存活引用或访问
+    /// 页表独占且存活，未启用或已切离并完成同步；恢复使用前须同步页表修改
+    pub(crate) unsafe fn unmap_user_range(
+        &mut self,
+        begin: usize,
+        end: usize,
+    ) {
+        for va in (begin..end).step_by(PAGE_SIZE) {
+            unsafe {
+                let pte = pagetable::unmap_4k(self.root_pa, va)
+                    .expect("data unmap failed");
+                pmem::free_data(pte.pa());
             }
         }
     }

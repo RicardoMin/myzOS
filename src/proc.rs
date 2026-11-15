@@ -3,13 +3,15 @@ use myzos_uapi::E_BADARG;
 use crate::{
     console, context::{Context, arch_switch}, cpu, irq, mem::{
         PAGE_SIZE, kernel_vm, layout::{
-            KSTACK_BOTTOM, KSTACK_TOP,  USER_FRAME,
-            HEAP_START, MMAP_BEGIN,
+            HEAP_START, KSTACK_BOTTOM, KSTACK_TOP, MMAP_BEGIN, USER_FRAME, USER_STACK_BOTTOM, USER_STACK_LIMIT, USER_STACK_TOP,
         }, pmem, user_vm::UserSpace,
-    }, trampoline, trap, user_frame::UserFrame,
+    }, proc, trampoline, trap, user_frame::UserFrame,
 };
 use core::{
-    arch::asm, mem::MaybeUninit, ptr, sync::atomic::{AtomicPtr, Ordering},
+    arch::asm,
+    mem::MaybeUninit,
+    ptr,
+    sync::atomic::{AtomicPtr, Ordering},
 };
 use crate::syscall;
 use crate::shell;
@@ -66,10 +68,15 @@ impl Process {
     }
 
     /// # Safety
-    /// 进程从未发布或运行，且满足 UserSpace::destroy 的全部约束
+    /// 进程从未发布或运行; 独占页表及私有页，所有外部访问和借用已结束
+    /// 堆顶和栈页数准确描述本进程拥有的页面
     unsafe fn destroy(mut self) {
         unsafe { 
             self.space.resize_heap(self.heap_top, HEAP_START);
+
+            let bottom = USER_STACK_TOP - self.user_stack_pages * PAGE_SIZE;
+            self.space.unmap_user_range(bottom, USER_STACK_BOTTOM);
+
             self.space.destroy();
         }
     }
@@ -101,6 +108,34 @@ impl Process {
         self.heap_top = new_top;
 
         new_top as isize
+    }
+
+    /// # Safety
+    /// 当前独占进程，用户页表已暂停并完成同步
+    /// 栈页数准确，待增长区间未映射；恢复执行前须同步新增映射
+    unsafe fn grow_stack(&mut self, fault_va: usize) -> bool {
+        let old_bottom =
+            USER_STACK_TOP - self.user_stack_pages * PAGE_SIZE;
+
+        if fault_va < USER_STACK_LIMIT {
+            return false;
+        }
+
+        if fault_va >= old_bottom {
+            return false;
+        }
+
+        let new_bottom = fault_va & !(PAGE_SIZE - 1);
+
+        unsafe {
+            self.space.map_user_range(new_bottom, old_bottom);
+        }
+
+        self.user_stack_pages = (
+            USER_STACK_TOP - new_bottom
+        ) / PAGE_SIZE;
+
+        true
     }
 }
 
@@ -378,7 +413,7 @@ extern "C" fn user_trap() -> ! {
                 assert_eq!(a7, 1, "user copyinstr or brk checks failed");
 
                 let _ = console::print(format_args!(
-                    "user: copyinstr and brk checks passed\r\n",
+                    "user: copyinstr, brk and stack checks passed\r\n",
                 ));
 
                 let _ = console::print(format_args!(
@@ -400,6 +435,31 @@ extern "C" fn user_trap() -> ! {
                     frame.regs.sepc = sepc
                         .checked_add(4)
                         .expect("user test marker PC overflow");
+                }
+            }
+            13 | 15 => {
+                let (ret, new_pages) = unsafe {
+                    let process = &mut *current;
+
+                    let ans = process.grow_stack(value);
+
+                    (ans, process.user_stack_pages)
+                };
+
+                if !ret {
+                    trap::rust_trap_fatal(
+                        cause,
+                        sepc,
+                        value,
+                        sstatus,
+                        user_sp,
+                    );
+                } else {
+                    let _ = console::print(format_args!(
+                        "stack: fault={:#x}, pages={}\r\n",
+                        value,
+                        new_pages,
+                    ));
                 }
             }
             _ => {
@@ -455,11 +515,18 @@ pub fn check() {
     assert_eq!(ret as usize, HEAP_START + PAGE_SIZE);
 
     unsafe {
+        assert_eq!(process.grow_stack(USER_STACK_LIMIT - 1), false);
+        assert_eq!(process.grow_stack(USER_STACK_TOP - 1), false);
+        assert_eq!(process.grow_stack(USER_STACK_TOP - 3 * PAGE_SIZE), true);
+        assert_eq!(process.user_stack_pages, 3);
+    }
+
+    unsafe {
         process.destroy();
     }
     assert_eq!(pmem::free_counts(), before);
 
     let _ = console::print(format_args!(
-        "process: user mappings and resource reclaim checks passed (not runnable)",
+        "process: user mappings and resource reclaim checks passed (not runnable)\r\n",
     ));
 }

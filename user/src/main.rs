@@ -3,7 +3,7 @@
 
 mod syscall;
 
-use core::{panic::PanicInfo, ptr::read_volatile};
+use core::{panic::PanicInfo, mem::MaybeUninit};
 use core::arch::asm;
 use myzos_uapi::{
     SYS_HELLO,
@@ -95,6 +95,34 @@ unsafe fn check_brk() -> bool {
     true
 }
 
+#[inline(never)]
+fn check_stack() -> bool {
+    let mut storage = MaybeUninit::<[u8; 4 * 4096]>::uninit();
+    let p = storage.as_mut_ptr().cast::<u8>();
+
+    unsafe {
+        for (i, &byte) in b"stack high\0".iter().enumerate() {
+            p.add(3 * 4096 + i).write_volatile(byte);
+        }
+
+        let high = syscall6(
+            SYS_TEST_COPYINSTR,
+            [p.add(3 * 4096) as usize, 0, 0, 0, 0, 0],
+        );
+
+        for (i, &byte) in b"stack low\0".iter().enumerate() {
+            p.add(i).write_volatile(byte);
+        }
+
+        let low = syscall6(
+            SYS_TEST_COPYINSTR,
+            [p as usize, 0, 0, 0, 0, 0],
+        );
+
+        high == 0 && low == 0
+    }
+}
+
 
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.entry")]
@@ -175,6 +203,8 @@ pub extern "C" fn _start() -> ! {
 
     let heap_ok = unsafe {check_brk()};
 
+    let stack_ok = check_stack();
+
     unsafe {
         asm!(
             ".option push",
@@ -188,7 +218,7 @@ pub extern "C" fn _start() -> ! {
             in("a4") denied,
             in("a5") cross,
             in("a6") copyout_ok as usize,
-            in("a7") (copyinstr_ok && heap_ok) as usize,
+            in("a7") (copyinstr_ok && heap_ok && stack_ok) as usize,
             options(nostack),
         );
     }
