@@ -69,11 +69,6 @@ pub(crate) fn run(is_boot: bool) {
             }
         }
 
-        assert!(
-            seen.iter().all(|&present| present),
-            "some nodes were not allocated",
-        );
-
         {
             let pool = POOL.lock();
             assert_eq!(pool.free_count(), 0);

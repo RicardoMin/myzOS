@@ -5,6 +5,7 @@ pub const SYS_TEST_COPYIN: usize = 1;
 pub const SYS_TEST_COPYOUT: usize = 2;
 pub const SYS_TEST_COPYINSTR: usize = 3;
 pub const SYS_BRK: usize = 4;
+pub const SYS_MMAP: usize = 5;
 
 pub const E_BADARG: isize = -1;
 pub const E_NOSYS: isize = -38;

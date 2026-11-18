@@ -1,4 +1,8 @@
 use crate::spinlock::SpinLock;
+use super::{
+    PAGE_SIZE,
+    layout::{MMAP_BEGIN, MMAP_END},
+};
 
 pub(crate) mod selftest;
 
@@ -70,7 +74,7 @@ impl NodePool {
         }
 
         Self {
-            nodes: nodes,
+            nodes,
             free_head: Some(NodeId(0)),
             free_count: N_MMAP,
         }
@@ -78,7 +82,7 @@ impl NodePool {
 
     pub(crate) fn alloc(&mut self) -> NodeId {
         let id = self.free_head.expect("mmap node pool exhausted");
-        let node = &mut self.nodes[id.0];
+        let node = &mut self.nodes[id.index()];
 
         assert!(!node.used);
 
@@ -91,6 +95,7 @@ impl NodePool {
         id
     }
 
+    /// 仅归还当前拥有且脱离区域链的节点；归还后不得再使用旧编号
     pub(crate) fn free(&mut self, id: NodeId) {
         let node = &mut self.nodes[id.0];
         assert!(node.used);
@@ -117,5 +122,140 @@ impl NodePool {
 
     pub(crate) fn free_count(&self) -> usize {
         self.free_count
+    }
+
+    fn find_gap(
+        &self,
+        head: Option<NodeId>,
+        len: usize,
+    ) -> Option<usize> {
+        let mut candidate = MMAP_BEGIN;
+
+        let mut next = head;
+
+        while let Some(id) = next {
+            let region = self.get(id);
+            let region_len = region.begin - candidate;
+
+            if region_len >= len {
+                return Some(candidate);
+            }
+
+            candidate = region.begin + region.pages * PAGE_SIZE;
+            next = region.next
+        }
+
+        if MMAP_END - candidate >= len {
+            Some(candidate)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn reserve_region(
+        &mut self,
+        head: &mut Option<NodeId>,
+        requested_begin: usize,
+        len: usize,
+    ) -> Option<usize> {
+        if len == 0 {
+            return None;
+        }
+        if len % PAGE_SIZE != 0 {
+            return None;
+        }
+        if requested_begin % PAGE_SIZE != 0 {
+            return None;
+        }
+
+        let begin = if requested_begin == 0 {
+            self.find_gap(*head, len)?
+        } else {
+            requested_begin
+        };
+
+        let end = begin.checked_add(len)?;
+        let pages = len / PAGE_SIZE;
+        
+        if begin < MMAP_BEGIN || end > MMAP_END {
+            return None;
+        }
+
+        let mut prev = None;
+        let mut next = *head;
+
+        while let Some(id) = next {
+            let region = self.get(id);
+            if region.begin >= begin {
+                break;
+            }
+            prev = Some(id);
+            next = region.next;
+        }
+
+        let left_adjacent = if let Some(id) = prev {
+            let left = self.get(id);
+            let left_end = left.begin + left.pages * PAGE_SIZE;
+
+            if left_end > begin {
+                return None;
+            }
+
+            left_end == begin
+        } else {
+            false
+        };
+
+        let right_adjacent = if let Some(id) = next {
+            let right = self.get(id);
+
+            if end > right.begin {
+                return None;
+            }
+
+            end == right.begin
+        } else {
+            false
+        };
+
+        match (left_adjacent, right_adjacent) {
+            (false, false) => {
+                let id = self.alloc();
+                {
+                    let region = self.get_mut(id);
+                    region.begin = begin;
+                    region.pages = pages;
+                    region.next = next;
+                }
+
+                if let Some(left_id) = prev {
+                    self.get_mut(left_id).next = Some(id);
+                } else {
+                    *head = Some(id);
+                }
+            }
+            (true, false) => {
+                let left_region = self.get_mut(prev.unwrap());
+                left_region.pages += pages;
+            }
+            (false, true) => {
+                let right_region = self.get_mut(next.unwrap());
+                right_region.begin = begin;
+                right_region.pages += pages;
+            }
+            (true, true) => {
+                let right_id = next.unwrap();
+                let right = *self.get(right_id);
+                {
+                    let left = self.get_mut(prev.unwrap());
+                    left.pages += pages + right.pages;
+                    left.next = right.next;
+                }
+
+                self.free(right_id);
+            }
+        }
+
+        Some(begin)
     }
 }

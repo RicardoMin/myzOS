@@ -10,6 +10,7 @@ use myzos_uapi::{
     SYS_TEST_COPYOUT,
     SYS_TEST_COPYINSTR,
     SYS_BRK,
+    SYS_MMAP,
 };
 
 
@@ -106,7 +107,12 @@ pub(crate) unsafe fn dispatch(
 
             0
         }
-        SYS_BRK => unsafe { process.brk(args[0]) }
+        SYS_BRK => unsafe {
+             process.brk(args[0]) 
+        }
+        SYS_MMAP => unsafe {
+            process.mmap(args[0], args[1])
+        }
         _ =>  E_NOSYS
     }
 }

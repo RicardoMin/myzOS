@@ -15,6 +15,7 @@ use myzos_uapi::{
 use syscall::{
     brk,
     syscall6,
+    mmap,
 };
 
 
@@ -123,6 +124,43 @@ fn check_stack() -> bool {
     }
 }
 
+fn check_mmap() -> bool {
+    const PAGE: usize = 4096;
+    const MMAP_BEGIN: usize =
+        (1usize << 38) - (4096 + 2 + 16384) * PAGE;
+
+    let first = mmap(MMAP_BEGIN, PAGE) as usize;
+    let second = mmap(0, PAGE) as usize;
+
+    if first != MMAP_BEGIN || second != MMAP_BEGIN + PAGE {
+        return false;
+    }
+
+    unsafe {
+        if (first as *const u8).read_volatile() != 0
+        || ((first + PAGE - 1) as *const u8).read_volatile() != 0
+        {
+            return false;
+        }
+        if (second as *const u8).read_volatile() != 0
+        || ((second + PAGE - 1) as *const u8).read_volatile() != 0
+        {
+            return false;
+        }
+
+        (first as *mut u8).write_volatile(0x11);
+        (second as *mut u8).write_volatile(0x22);
+        if (first as *const u8).read_volatile() != 0x11 {
+            return false;
+        }
+        if (second as *const u8).read_volatile() != 0x22 {
+            return false;
+        }
+    }
+
+    true
+}
+
 
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.entry")]
@@ -205,6 +243,8 @@ pub extern "C" fn _start() -> ! {
 
     let stack_ok = check_stack();
 
+    let mmap_ok = check_mmap();
+
     unsafe {
         asm!(
             ".option push",
@@ -218,7 +258,7 @@ pub extern "C" fn _start() -> ! {
             in("a4") denied,
             in("a5") cross,
             in("a6") copyout_ok as usize,
-            in("a7") (copyinstr_ok && heap_ok && stack_ok) as usize,
+            in("a7") (copyinstr_ok && heap_ok && stack_ok && mmap_ok) as usize,
             options(nostack),
         );
     }

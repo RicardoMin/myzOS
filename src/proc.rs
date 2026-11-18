@@ -5,6 +5,7 @@ use crate::{
         PAGE_SIZE, kernel_vm, layout::{
             HEAP_START, KSTACK_BOTTOM, KSTACK_TOP, MMAP_BEGIN, USER_FRAME, USER_STACK_BOTTOM, USER_STACK_LIMIT, USER_STACK_TOP,
         }, pmem, user_vm::UserSpace,
+        mmap::{self, NodeId},
     }, trampoline, trap, user_frame::UserFrame,
 };
 use core::{
@@ -47,6 +48,7 @@ pub(crate) struct Process {
     user_stack_pages: usize,
     kstack_top: usize,
     context: Context,
+    mmap_head: Option<NodeId>,
 }
 
 
@@ -63,19 +65,35 @@ impl Process {
                 ra: 0,
                 sp: KSTACK_TOP,
                 saved: [0; 12],
-            }
+            },
+            mmap_head: None,
         }
     }
 
     /// # Safety
     /// 进程从未发布或运行; 独占页表及私有页，所有外部访问和借用已结束
-    /// 堆顶和栈页数准确描述本进程拥有的页面
+    /// 堆顶、栈页数和 mmap 链准确描述本进程拥有的私有页面及区域节点
     unsafe fn destroy(mut self) {
         unsafe { 
             self.space.resize_heap(self.heap_top, HEAP_START);
 
             let bottom = USER_STACK_TOP - self.user_stack_pages * PAGE_SIZE;
             self.space.unmap_user_range(bottom, USER_STACK_BOTTOM);
+
+            while let Some(id) = self.mmap_head  {
+                let region = {
+                    let pool = mmap::POOL.lock();
+                    *pool.get(id)
+                };
+
+                self.space.unmap_user_range(region.begin, region.begin + region.pages * PAGE_SIZE);
+
+                self.mmap_head = region.next;
+                {
+                    let mut pool = mmap::POOL.lock();
+                    pool.free(id);
+                }
+            }
 
             self.space.destroy();
         }
@@ -87,7 +105,7 @@ impl Process {
 
     /// # Safety
     /// 当前独占进程; 用户页表从未启用，或已切离并完成同步
-    /// 栈页数准确，待增长区间未映射；恢复执行前须同步新增映射
+    /// 堆顶准确描述私有堆页；收缩区无存活引用或访问，恢复执行前须同步页表修改
     pub(crate) unsafe fn brk(&mut self, new_top: usize) -> isize {
         if new_top == 0 {
             return self.heap_top as isize;
@@ -111,7 +129,7 @@ impl Process {
     }
 
     /// # Safety
-    /// 当前独占进程，用户页表已暂停并完成同步
+    /// 当前独占进程，用户页表从未启用，或已切离并完成同步
     /// 栈页数准确，待增长区间未映射；恢复执行前须同步新增映射
     unsafe fn grow_stack(&mut self, fault_va: usize) -> bool {
         let old_bottom =
@@ -136,6 +154,36 @@ impl Process {
         ) / PAGE_SIZE;
 
         true
+    }
+
+    /// # Safety
+    /// 当前独占进程及区域链；用户页表从未启用，或已切离并完成同步
+    /// 区域链准确描述已有私有映射，恢复执行前须同步新增映射
+    pub(crate) unsafe fn mmap(
+        &mut self,
+        begin: usize,
+        len: usize,
+    ) -> isize {
+        let actual = {
+            let mut pool = mmap::POOL.lock();
+            if let Some(begin) = pool.reserve_region(&mut self.mmap_head, begin, len) {
+                begin
+            } else {
+                return E_BADARG;
+            }
+        };
+
+        unsafe {
+            self.space.map_user_range(actual, actual + len);
+        }
+
+        let _ = console::print(format_args!(
+            "mmap: mapped [{:#x}, {:#x})\r\n",
+            actual,
+            actual + len,
+        ));
+
+        actual as isize
     }
 }
 
@@ -410,7 +458,7 @@ extern "C" fn user_trap() -> ! {
 
                 assert_eq!(copyout_ok, 1, "user copyout check failed");
 
-                assert_eq!(a7, 1, "user copyinstr, brk or stack checks failed");
+                assert_eq!(a7, 1, "user copyinstr, brk, stack or mmap checks failed");
 
                 let _ = console::print(format_args!(
                     "user: copyinstr, brk and stack checks passed\r\n",
@@ -521,12 +569,31 @@ pub fn check() {
         assert_eq!(process.user_stack_pages, 3);
     }
 
+    let b = MMAP_BEGIN;
+    let p = PAGE_SIZE;
+    unsafe {
+        assert_eq!(process.mmap(b + 4 * p, 3 * p), (b + 4 * p) as isize);
+        assert_eq!(process.mmap(b + 10 * p, 2 * p), (b + 10 * p) as isize);
+        assert_eq!(process.mmap(b + 2 * p, 2 * p), (b + 2 * p) as isize);
+        assert_eq!(process.mmap(b + 12 * p, p), (b + 12 * p) as isize);
+        assert_eq!(process.mmap(0, 2 * p), b as isize);
+        assert_eq!(process.mmap(0, 3 * p), (b + 7 * p) as isize);
+        assert_eq!(process.mmap(0, 10 * p), (b + 13 * p) as isize);
+        let nodes_before = mmap::POOL.lock().free_count();
+        assert_eq!(process.mmap(b + p, 2 * p), E_BADARG);
+        assert_eq!(process.mmap(b + 24 * p + 1, p), E_BADARG);
+        assert_eq!(mmap::POOL.lock().free_count(), nodes_before);
+    }
+
     unsafe {
         process.destroy();
     }
     assert_eq!(pmem::free_counts(), before);
 
     let _ = console::print(format_args!(
-        "process: user mappings and resource reclaim checks passed (not runnable)\r\n",
+        concat!(
+            "process: user mappings and resource reclaim checks passed (not runnable)\r\n",
+            "mmap: first-fit, merge and reclaim checks passed\r\n",
+        ),
     ));
 }

@@ -34,3 +34,13 @@ pub unsafe fn brk(new_top: usize) -> isize {
         )
     }
 }
+
+pub fn mmap(begin: usize, len: usize) -> isize {
+    // SAFETY: 该调用仅新增映射，不解除或覆盖现有区域
+    unsafe {
+        syscall6(
+            myzos_uapi::SYS_MMAP,
+            [begin, len, 0, 0, 0, 0],
+        )
+    }
+}
