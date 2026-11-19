@@ -3,14 +3,7 @@ use crate::{
     proc::Process,
 };
 use myzos_uapi::{
-    E_BADARG,
-    E_NOSYS,
-    SYS_HELLO,
-    SYS_TEST_COPYIN,
-    SYS_TEST_COPYOUT,
-    SYS_TEST_COPYINSTR,
-    SYS_BRK,
-    SYS_MMAP,
+    E_BADARG, E_NOSYS, SYS_BRK, SYS_HELLO, SYS_MMAP, SYS_MUNMAP, SYS_TEST_COPYIN, SYS_TEST_COPYINSTR, SYS_TEST_COPYOUT,
 };
 
 
@@ -108,10 +101,13 @@ pub(crate) unsafe fn dispatch(
             0
         }
         SYS_BRK => unsafe {
-             process.brk(args[0]) 
+             process.brk(args[0])
         }
         SYS_MMAP => unsafe {
             process.mmap(args[0], args[1])
+        }
+        SYS_MUNMAP => unsafe {
+            process.munmap(args[0], args[1])
         }
         _ =>  E_NOSYS
     }

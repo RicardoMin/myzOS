@@ -1,5 +1,7 @@
 use core::arch::asm;
 
+use crate::syscall;
+
 
 /// # Safety
 /// 调用者须遵守所选系统调用的内存、别名和生命周期约束
@@ -40,6 +42,17 @@ pub fn mmap(begin: usize, len: usize) -> isize {
     unsafe {
         syscall6(
             myzos_uapi::SYS_MMAP,
+            [begin, len, 0, 0, 0, 0],
+        )
+    }
+}
+
+/// # Safety
+/// 被解除的区域中没有仍需使用的对象或引用，成功后调用者不得再访问已释放页面
+pub unsafe fn munmap(begin: usize, len: usize) -> isize {
+    unsafe {
+        syscall6(
+            myzos_uapi::SYS_MUNMAP,
             [begin, len, 0, 0, 0, 0],
         )
     }

@@ -16,6 +16,7 @@ use syscall::{
     brk,
     syscall6,
     mmap,
+    munmap,
 };
 
 
@@ -154,6 +155,20 @@ fn check_mmap() -> bool {
             return false;
         }
         if (second as *const u8).read_volatile() != 0x22 {
+            return false;
+        }
+
+        if munmap(second, PAGE) != 0 {
+            return false;
+        }
+
+        if syscall6(SYS_TEST_COPYIN, [second, 1, 0, 0, 0, 0]) != E_BADARG {
+            return false;
+        }
+        if mmap(0, PAGE) != second as isize {
+            return false;
+        }
+        if (second as *const u8).read_volatile() != 0 {
             return false;
         }
     }

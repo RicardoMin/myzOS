@@ -176,7 +176,7 @@ impl NodePool {
 
         let end = begin.checked_add(len)?;
         let pages = len / PAGE_SIZE;
-        
+
         if begin < MMAP_BEGIN || end > MMAP_END {
             return None;
         }
@@ -257,5 +257,70 @@ impl NodePool {
         }
 
         Some(begin)
+    }
+
+    pub(crate) fn cut_next(
+        &mut self,
+        head: &mut Option<NodeId>,
+        prev: &mut Option<NodeId>,
+        begin: usize,
+        end: usize,
+    ) -> Option<(usize, usize)> {
+        loop {
+            let current = match *prev {
+                Some(id) => self.get(id).next,
+                None => *head,
+            };
+            let id = current?;
+            let old = *self.get(id);
+            let old_end = old.begin + old.pages * PAGE_SIZE;
+            if old.begin >= end {
+                return None;
+            } else if old_end <= begin {
+                *prev = Some(id);
+            } else {
+                let lo = begin.max(old.begin);
+                let hi = end.min(old_end);
+
+                let left_adjacent = lo == old.begin;
+                let right_adjacent = hi == old_end;
+
+                match (left_adjacent, right_adjacent) {
+                    (true, true) => {
+                        if let Some(prev_id) = *prev {
+                            self.get_mut(prev_id).next = old.next;
+                        } else {
+                            *head = old.next;
+                        }
+                        self.free(id);
+                    }
+                    (true, false) => {
+                        let cur = self.get_mut(id);
+                        cur.begin = hi;
+                        cur.pages = (old_end - hi) / PAGE_SIZE;
+                        *prev = Some(id);
+                    }
+                    (false, true) => {
+                        let cur = self.get_mut(id);
+                        cur.pages = (lo - old.begin) / PAGE_SIZE;
+                        *prev = Some(id);
+                    }
+                    (false, false) => {
+                        let right_id = self.alloc();
+                        let right = self.get_mut(right_id);
+                        right.begin = hi;
+                        right.pages = (old_end - hi) / PAGE_SIZE;
+                        right.next = old.next;
+
+                        let left = self.get_mut(id);
+                        left.pages = (lo - left.begin) / PAGE_SIZE;
+                        left.next = Some(right_id);
+
+                        *prev = Some(right_id);
+                    }
+                }
+                return Some((lo, hi));
+            }
+        }
     }
 }

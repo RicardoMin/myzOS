@@ -3,9 +3,9 @@ use myzos_uapi::E_BADARG;
 use crate::{
     console, context::{Context, arch_switch}, cpu, irq, mem::{
         PAGE_SIZE, kernel_vm, layout::{
-            HEAP_START, KSTACK_BOTTOM, KSTACK_TOP, MMAP_BEGIN, USER_FRAME, USER_STACK_BOTTOM, USER_STACK_LIMIT, USER_STACK_TOP,
-        }, pmem, user_vm::UserSpace,
-        mmap::{self, NodeId},
+            HEAP_START, KSTACK_BOTTOM, KSTACK_TOP, MMAP_BEGIN, MMAP_END,
+             USER_FRAME, USER_STACK_BOTTOM, USER_STACK_LIMIT, USER_STACK_TOP,
+        }, mmap::{self, NodeId}, pmem::{self, init}, user_vm::UserSpace,
     }, trampoline, trap, user_frame::UserFrame,
 };
 use core::{
@@ -184,6 +184,51 @@ impl Process {
         ));
 
         actual as isize
+    }
+
+    /// # Safety
+    /// 当前独占进程及区域链，用户页表从未启用或已切离并完成同步
+    /// 待回收页面没有存活引用或并发访问，恢复用户执行前须同步页表修改
+    pub(crate) unsafe fn munmap(
+        &mut self,
+        begin: usize,
+        len: usize
+    ) -> isize {
+        let Some(end) = begin.checked_add(len) else {
+            return E_BADARG;
+        };
+        if len == 0 {
+            return E_BADARG;
+        }
+        if begin % PAGE_SIZE != 0 || len % PAGE_SIZE != 0 {
+            return E_BADARG;
+        }
+        if begin < MMAP_BEGIN || end > MMAP_END {
+            return E_BADARG;
+        }
+
+        let mut prev = None;
+
+        loop {
+            let cut = {
+                let mut pool = mmap::POOL.lock();
+                pool.cut_next(&mut self.mmap_head, &mut prev, begin, end)
+            };
+
+            let Some((lo, hi)) = cut else { break };
+
+            unsafe {
+                self.space.unmap_user_range(lo, hi);
+            }
+        }
+
+        let _ = console::print(format_args!(
+            "munmap: request [{:#x}, {:#x}) completed\r\n",
+            begin,
+            end,
+        ));
+
+        0
     }
 }
 
@@ -538,6 +583,7 @@ pub fn check() {
     let image = include_bytes!(env!("MYZOS_USER_IMAGE"));
 
     let before = pmem::free_counts();
+    let initial_nodes = mmap::POOL.lock().free_count();
     let mut process = Process::new(image);
 
     unsafe {process.space.check_layout(image)};
@@ -579,16 +625,34 @@ pub fn check() {
         assert_eq!(process.mmap(0, 2 * p), b as isize);
         assert_eq!(process.mmap(0, 3 * p), (b + 7 * p) as isize);
         assert_eq!(process.mmap(0, 10 * p), (b + 13 * p) as isize);
-        let nodes_before = mmap::POOL.lock().free_count();
+        if let Some(id) = process.mmap_head {
+            let pool = mmap::POOL.lock();
+            let region = pool.get(id);
+            assert_eq!(
+                (region.begin, region.pages, region.next),
+                (b, 23, None),
+            );
+            assert_eq!(pool.free_count(), initial_nodes - 1);
+        }
         assert_eq!(process.mmap(b + p, 2 * p), E_BADARG);
         assert_eq!(process.mmap(b + 24 * p + 1, p), E_BADARG);
-        assert_eq!(mmap::POOL.lock().free_count(), nodes_before);
+
+        assert_eq!(process.munmap(b + 8 * p, 3 * p), 0);
+        if let Some(id) = process.mmap_head {
+            let pool = mmap::POOL.lock();
+            let region = pool.get(id);
+            assert_eq!(
+                (region.begin, region.pages),
+                (b, 8),
+            );
+        }
     }
 
     unsafe {
         process.destroy();
     }
     assert_eq!(pmem::free_counts(), before);
+    assert_eq!(mmap::POOL.lock().free_count(), initial_nodes);
 
     let _ = console::print(format_args!(
         concat!(
