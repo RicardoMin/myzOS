@@ -3,16 +3,14 @@ use myzos_uapi::E_BADARG;
 use crate::{
     console, context::{Context, arch_switch}, cpu, irq, mem::{
         PAGE_SIZE, kernel_vm, layout::{
-            HEAP_START, KSTACK_BOTTOM, KSTACK_TOP, MMAP_BEGIN, MMAP_END,
-             USER_FRAME, USER_STACK_LIMIT, USER_STACK_TOP, USER_ENTRY,
-        }, mmap::{self, NodeId}, pmem, user_vm::UserSpace,
+            HEAP_START, KSTACK_BOTTOM, KSTACK_TOP, MMAP_BEGIN, MMAP_END, TRAMPOLINE, USER_ENTRY, USER_FRAME, USER_STACK_LIMIT, USER_STACK_TOP,
+        }, mmap::{self, NodeId}, pagetable, pmem, user_vm::UserSpace, vm::{
+            PTE_R, PTE_U, PTE_W, PTE_X,
+        }
     }, trampoline, trap, user_frame::UserFrame,
 };
 use core::{
-    arch::asm,
-    mem::MaybeUninit,
-    ptr,
-    sync::atomic::{AtomicPtr, Ordering},
+    arch::asm, marker, mem::MaybeUninit, ptr, sync::atomic::{AtomicPtr, Ordering},
 };
 use crate::syscall;
 use crate::shell;
@@ -653,6 +651,7 @@ pub fn check() {
         assert_eq!(process.mmap(b + p, 2 * p), E_BADARG);
         assert_eq!(process.mmap(b + 24 * p + 1, p), E_BADARG);
 
+        // munmap 
         assert_eq!(process.munmap(b + 8 * p, 3 * p), 0);
         if let Some(id) = process.mmap_head {
             let pool = mmap::POOL.lock();
@@ -668,7 +667,49 @@ pub fn check() {
                 (b + 11 * p, 12),
             );
         }
+
+        // copy_user_pages_to 测试
+        let marker_va = HEAP_START + p - 1;
+        process.space.copy_to_user(marker_va, &[0x73])
+            .expect("copy to user failed");
+
+        let cbefore = pmem::free_counts();
+        let cnodes = {
+            let pool = mmap::POOL.lock();
+            pool.free_count()
+        };
+
+        let dst_root = pmem::alloc_kernel();
+        process.copy_user_pages_to(dst_root);
+
+        let image = pagetable::lookup_4k(dst_root, USER_ENTRY)
+            .expect("copied image page missing");
+        let heap = pagetable::lookup_4k(dst_root, HEAP_START)
+            .expect("copied heap page missing");
+
+        assert!(image.flags() & PTE_X == PTE_X);
+        assert!(heap.flags() & PTE_W == PTE_W);
+
+        for va in [b + 8 * p, USER_FRAME, TRAMPOLINE] {
+            assert!(pagetable::lookup_4k(dst_root, va).is_none());
+        }
+
+        let marker_pa = pagetable::translate_4k(dst_root, marker_va)
+            .expect("translate marker_va failed");
+        assert_eq!((marker_pa as *const u8).read_volatile(), 0x73);
+        (marker_pa as *mut u8).write_volatile(0x9a);
+
+        let mut o_marker = [0u8; 1];
+        process.space.copy_from_user(&mut o_marker, marker_va)
+            .expect("copy from user failed");
+        assert_eq!(o_marker[0], 0x73);
+
+        UserSpace::destroy_user_root(dst_root);
     }
+
+    let _ = console::print(format_args!(
+        "copy: permissions, independence, holes and reclaim passed\r\n",
+    ));
 
     unsafe {
         process.destroy();
