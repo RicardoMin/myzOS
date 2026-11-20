@@ -1,7 +1,5 @@
 use core::arch::asm;
 
-use crate::syscall;
-
 
 /// # Safety
 /// 调用者须遵守所选系统调用的内存、别名和生命周期约束

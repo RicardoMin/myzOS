@@ -1,7 +1,7 @@
 use core::{ptr, slice};
 use super::{
     PAGE_SIZE, pagetable, pmem,
-    vm::{PTE_R, PTE_W, PTE_X, PTE_U},
+    vm::{Pte, PTE_R, PTE_W, PTE_X, PTE_U},
 };
 use crate::user_frame::UserFrame;
 use super::layout::{
@@ -99,26 +99,13 @@ impl UserSpace {
     /// 映射未被外部修改, trampoline 是永久只读共享页，本对象不拥有它
     /// 动态映射已经清空，仅保留构造时建立的固定映射
     pub unsafe fn destroy(self) {
-        let old = unsafe {
-            pagetable::unmap_4k(self.root_pa, USER_ENTRY)
-                .expect("user image missing")
-        };
-
-        assert_eq!(old.pa(), self.image_pa);
-
-        let old_stack = unsafe {
-            pagetable::unmap_4k(self.root_pa, USER_STACK_BOTTOM)
-                .expect("user stack missing")
-        };
-
-        assert_eq!(old_stack.pa(), self.stack_pa);
-
         let old_frame = unsafe {
             pagetable::unmap_4k(self.root_pa, USER_FRAME)
                 .expect("user frame missing")
         };
 
         assert_eq!(old_frame.pa(), self.frame_pa);
+        unsafe{pmem::free_kernel(self.frame_pa);}
 
         let old_trampoline = unsafe {
             pagetable::unmap_4k(self.root_pa, TRAMPOLINE)
@@ -128,10 +115,40 @@ impl UserSpace {
         assert_eq!(old_trampoline.pa(), trampoline::pa());
 
         unsafe {
-            pmem::free_data(self.image_pa);
-            pmem::free_data(self.stack_pa);
-            pmem::free_kernel(self.frame_pa);
-            pmem::free_kernel(self.root_pa);
+            Self::destroy_table(self.root_pa, 2);
+        }
+    }
+
+    /// # Safety
+    /// 表树从未启用且由调用者独占，无共享子表、环或存活借用
+    /// 特殊映射已摘除，每个有效叶独占一个 4 KiB 用户数据池页
+    /// 各级表均来自内核页池且可直接访问，调用结束后 table_pa 已释放
+    unsafe fn destroy_table(table_pa: usize, level: usize) {
+        for index in 0..pagetable::ENTRIES {
+            let entry = unsafe{
+                pagetable::read_pte(table_pa, index)
+            };
+            if !entry.is_valid() {
+                continue;
+            }
+
+            if entry.is_leaf() {
+                assert_eq!(level, 0);
+                assert!(entry.flags() & PTE_U == PTE_U);
+                unsafe {
+                    pagetable::write_pte(table_pa, index, Pte::empty());
+                    pmem::free_data(entry.pa());
+                }
+            } else {
+                assert!(level > 0);
+                unsafe {
+                    pagetable::write_pte(table_pa, index, Pte::empty());
+                    Self::destroy_table(entry.pa(), level - 1);
+                }
+            }
+        }
+        unsafe {
+            pmem::free_kernel(table_pa);
         }
     }
 

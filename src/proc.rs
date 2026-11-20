@@ -5,7 +5,7 @@ use crate::{
         PAGE_SIZE, kernel_vm, layout::{
             HEAP_START, KSTACK_BOTTOM, KSTACK_TOP, MMAP_BEGIN, MMAP_END,
              USER_FRAME, USER_STACK_BOTTOM, USER_STACK_LIMIT, USER_STACK_TOP,
-        }, mmap::{self, NodeId}, pmem::{self, init}, user_vm::UserSpace,
+        }, mmap::{self, NodeId}, pmem, user_vm::UserSpace,
     }, trampoline, trap, user_frame::UserFrame,
 };
 use core::{
@@ -75,24 +75,10 @@ impl Process {
     /// 堆顶、栈页数和 mmap 链准确描述本进程拥有的私有页面及区域节点
     unsafe fn destroy(mut self) {
         unsafe { 
-            self.space.resize_heap(self.heap_top, HEAP_START);
-
-            let bottom = USER_STACK_TOP - self.user_stack_pages * PAGE_SIZE;
-            self.space.unmap_user_range(bottom, USER_STACK_BOTTOM);
-
             while let Some(id) = self.mmap_head  {
-                let region = {
-                    let pool = mmap::POOL.lock();
-                    *pool.get(id)
-                };
-
-                self.space.unmap_user_range(region.begin, region.begin + region.pages * PAGE_SIZE);
-
-                self.mmap_head = region.next;
-                {
-                    let mut pool = mmap::POOL.lock();
-                    pool.free(id);
-                }
+                let mut pool = mmap::POOL.lock();
+                self.mmap_head = pool.get(id).next;
+                pool.free(id);
             }
 
             self.space.destroy();
@@ -503,7 +489,7 @@ extern "C" fn user_trap() -> ! {
 
                 assert_eq!(copyout_ok, 1, "user copyout check failed");
 
-                assert_eq!(a7, 1, "user copyinstr, brk, stack or mmap checks failed");
+                assert_eq!(a7, 1, "user copyinstr, brk, stack, mmap and munmap checks failed");
 
                 let _ = console::print(format_args!(
                     "user: copyinstr, brk and stack checks passed\r\n",
@@ -644,6 +630,12 @@ pub fn check() {
             assert_eq!(
                 (region.begin, region.pages),
                 (b, 8),
+            );
+            let r_id = region.next.expect("expected right region after split");
+            let right = pool.get(r_id);
+            assert_eq!(
+                (right.begin, right.pages),
+                (b + 11 * p, 12),
             );
         }
     }
