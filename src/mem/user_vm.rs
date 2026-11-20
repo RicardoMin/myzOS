@@ -3,7 +3,7 @@ use super::{
     PAGE_SIZE, pagetable, pmem,
     vm::{Pte, PTE_R, PTE_W, PTE_X, PTE_U},
 };
-use crate::user_frame::UserFrame;
+use crate::{mem::vm, user_frame::UserFrame};
 use super::layout::{
     USER_ENTRY,
     USER_STACK_BOTTOM,
@@ -95,9 +95,9 @@ impl UserSpace {
     }
 
     /// # Safety
-    /// 页表从未被任何 hart 启用；页表及私有页由调用者独占，所有借用和访问已结束
-    /// 映射未被外部修改, trampoline 是永久只读共享页，本对象不拥有它
-    /// 动态映射已经清空，仅保留构造时建立的固定映射
+    /// 地址空间从未被任何 hart 启用，调用者独占页表树，所有外部访问和借用均已结束
+    /// USER_FRAME 指向私有内核池页，TRAMPOLINE 指向永久共享代码
+    /// 其余有效页个各自独占一个 4 KiB 数据池页，各级页表来自内核池且无共享或环
     pub unsafe fn destroy(self) {
         let old_frame = unsafe {
             pagetable::unmap_4k(self.root_pa, USER_FRAME)
@@ -149,6 +149,36 @@ impl UserSpace {
         }
         unsafe {
             pmem::free_kernel(table_pa);
+        }
+    }
+
+    pub(crate) unsafe fn destroy_user_root(root_pa: usize) {
+        unsafe { Self::destroy_table(root_pa, 2) };
+    }
+
+    pub(crate) unsafe fn copy_range_to(
+        &self,
+        dst_root: usize,
+        begin: usize,
+        end: usize,
+    ) {
+        for va in (begin..end).step_by(PAGE_SIZE) {
+            unsafe {
+                let mut pte = pagetable::lookup_4k(self.root_pa, va)
+                    .expect("va entry not found");
+                
+                assert!(pte.flags() & PTE_U == PTE_U);
+
+                let new_pa = pmem::alloc_data();
+                ptr::copy_nonoverlapping(
+                    pte.pa() as *const u8,
+                    new_pa as *mut u8,
+                    PAGE_SIZE,
+                );
+                let permissiongs = pte.flags() & (PTE_R | PTE_W | PTE_X | PTE_U);
+                pagetable::map_4k(dst_root, va, new_pa, permissiongs)
+                    .expect("va map new_pa failed");
+            }
         }
     }
 

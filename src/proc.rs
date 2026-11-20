@@ -4,7 +4,7 @@ use crate::{
     console, context::{Context, arch_switch}, cpu, irq, mem::{
         PAGE_SIZE, kernel_vm, layout::{
             HEAP_START, KSTACK_BOTTOM, KSTACK_TOP, MMAP_BEGIN, MMAP_END,
-             USER_FRAME, USER_STACK_BOTTOM, USER_STACK_LIMIT, USER_STACK_TOP,
+             USER_FRAME, USER_STACK_LIMIT, USER_STACK_TOP, USER_ENTRY,
         }, mmap::{self, NodeId}, pmem, user_vm::UserSpace,
     }, trampoline, trap, user_frame::UserFrame,
 };
@@ -215,6 +215,36 @@ impl Process {
         ));
 
         0
+    }
+
+    /// # Safety
+    /// 复制期间，源进程的区域链、页表和数据页保持稳定，无并发写入或回收。
+    /// dst_root 指向独立、独占且未启用的有效页表，待复制区间尚未映射。
+    unsafe fn copy_user_pages_to(&self, dst_root: usize) {
+        unsafe {
+            // 用户镜像
+            self.space.copy_range_to(dst_root, USER_ENTRY, USER_ENTRY + PAGE_SIZE);
+            // 堆
+            self.space.copy_range_to(dst_root, HEAP_START, self.heap_top);
+            // 栈
+            self.space.copy_range_to(
+                dst_root,
+                USER_STACK_TOP - self.user_stack_pages * PAGE_SIZE,
+                USER_STACK_TOP,
+            );
+            // mmap 记录
+            let mut cur = self.mmap_head;
+            while let Some(id) = cur {
+                let region = {
+                    let pool = mmap::POOL.lock();
+                    *pool.get(id)
+                };
+                self.space.copy_range_to(
+                    dst_root, region.begin, region.begin + region.pages * PAGE_SIZE
+                );
+                cur = region.next;
+            }
+        }
     }
 }
 
@@ -492,7 +522,7 @@ extern "C" fn user_trap() -> ! {
                 assert_eq!(a7, 1, "user copyinstr, brk, stack, mmap and munmap checks failed");
 
                 let _ = console::print(format_args!(
-                    "user: copyinstr, brk and stack checks passed\r\n",
+                    "user: copyinstr, brk, stack, mmap and munmap checks passed\r\n",
                 ));
 
                 let _ = console::print(format_args!(
